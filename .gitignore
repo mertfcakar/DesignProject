@@ -1,0 +1,23 @@
+# --- Unreal Engine ---
+ue_project/Intermediate/
+ue_project/Saved/
+ue_project/Binaries/
+ue_project/DerivedDataCache/
+ue_project/Build/
+ue_project/.vs/
+ue_project/*.sln
+
+# --- Python / AI ---
+__pycache__/
+.venv/
+venv/
+ai_backend/audio_dataset/
+ai_backend/temp_extract/
+*.pt
+*.pth
+*.wav
+*.mp3
+
+# --- System ---
+.DS_Store
+Thumbs.db

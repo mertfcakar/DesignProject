@@ -1,12 +1,12 @@
-# 🧠 AI Backend: Music-to-Emotion Engine
-**Project:** AI-Powered Music Visualization (Capstone)
-**Target:** Emotion classification using Meta's HuBERT + LSTM.
+# 🧠 AI Backend: Music-to-Visual Aesthetic Engine (V2)
+**Project:** AI-Powered Real-Time Music Visualization (Capstone)
+**Architecture Status:** V2 (Production / Latency-Optimized)
 
-## 🛠️ The Tech Stack
-* **Feature Extractor:** Meta’s `HuBERT-Base-LS960` (Hidden-Unit BERT).
-* **Classifier:** Custom 2-Layer LSTM (Long Short-Term Memory).
-* **Dataset:** MTG-Jamendo (Academic Music Dataset).
-* **Target Emotions:** Happy, Sad, Energetic, Relaxing, Dark.
+## 🏗️ The Tech Stack (V2 Upgrades)
+* **Feature Extractor:** Google's `VGGish` (CNN-based, log-mel spectrograms for ultra-low latency). *(Upgraded from HuBERT)*.
+* **Classifier:** Custom Stateful 2-Layer LSTM with Latent Space Compression.
+* **Dataset:** MTG-Jamendo Full Dataset (500GB+, 55,000+ tracks).
+* **Output Topology:** 195 Multi-Label Tags (Genres, Instruments, Moods) compressed into a **5-Dimensional Aesthetic Vector** (Arousal, Valence, Timbre, Rhythm, Intensity) for real-time Unreal Engine rendering.
 
 ---
 
@@ -14,47 +14,67 @@
 
 | File | Purpose |
 | :--- | :--- |
-| `autotagging_moodtheme.tsv` | **The Map:** Contains the mapping of Track IDs to emotional labels. |
-| `jamendo_config.json` | **The Legend:** Maps emotion names (e.g., "Happy") to numerical IDs for the AI. |
-| `extract_features.py` | **The Ear:** Uses HuBERT to turn MP3s into mathematical tensors (`.pt`). |
-| `lstm_model.py` | **The Brain Blueprint:** Defines the neural network layers. |
-| `train.py` | **The Teacher:** Trains the LSTM on the extracted features. |
-| `emotion_model.pth` | **The Soul:** The final trained weights (The actual AI file). |
+| `autotagging.tsv` | **The Master Map:** Contains the mapping of all 55,000+ Track IDs to 195 multi-label tags. |
+| `requirements.txt` | **The Dependency List:** A hardware-agnostic list of software required to run the Python environment. |
+| `master_downloader.py` | **The Ingestion Engine:** Multi-threaded downloader that pulls the 500GB audio dataset directly from the Jamendo CDN. |
+| `extract_features_vggish.py` | **The Ear (CNN):** Slices 30s audio chunks, resamples to 16kHz, and uses VGGish to extract 128-D mathematical tensors (`cached_dataset.pt`). |
+| `lstm_model.py` | **The Brain Blueprint:** Defines the Stateful LSTM and the 5-D Autoencoder Bottleneck. |
+| `train.py` | **The Teacher:** Trains the LSTM on the 128-D features using `BCEWithLogitsLoss` for multi-label classification. |
+| `emotion_model_v2.pth` | **The Soul:** The final trained neural network weights. |
 
 ---
 
-## 🚀 Step-by-Step Testing Guide
+## 🚀 Deployment & Execution Guide
 
-If you are helping to test or run the large-scale version, follow these steps in order:
+Because this pipeline processes 500GB of audio and requires heavy GPU acceleration, the workflow is split between standard preparation and high-performance execution.
 
-### 1. Environment Setup
-Make sure you are in a virtual environment and have all dependencies.
-```bash
+### 💻 Phase 1: Preparation (MacBook / Standard PC)
+These steps are for setting up the repository and downloading the metadata. Do not run heavy extraction here.
+
+1. **Clone & Setup:**
+   ```bash
+   git clone [your-repo-link]
+   cd DesignProject/ai_backend
+   ```
+2. **Push to cloud:** Ensure `requirements.txt` only contains software packages (no PyTorch binaries) and push your setup.
+
+### 🖥️ Phase 2: The GPU Pipeline (Windows RTX 4080)
+These steps must be executed on the primary workstation.
+
+**1. Hardware-Aware Environment Setup**
+You must manually install the NVIDIA CUDA version of PyTorch before installing the rest of the requirements.
+```cmd
 python -m venv .venv
-source .venv/bin/activate  # Or venv\Scripts\activate on Windows
+.venv\Scripts\activate
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 pip install -r requirements.txt
 ```
 
-### 2. Data Ingestion (The "Homework")
-Run the downloader to fill the `audio_dataset/` folder.
-* **Execution:** `python ai_backend/wp3_direct_cdn.py`
-* **Check:** You should see folders like `/happy` and `/sad` filling with MP3s.
+**2. The 500GB Ingestion**
+Run the multi-threaded downloader. Ensure your `D:` drive path is correctly configured in the script.
+```cmd
+python master_downloader.py
+```
 
-### 3. Feature Extraction (The "Digestion")
-This is the most heavy-duty part. We use HuBERT to listen to the songs so we don't have to reload them during training.
-* **Execution:** `python ai_backend/extract_features.py`
-* **Check:** It will generate a file called `cached_dataset.pt`. This file should be roughly 10MB - 1GB depending on the dataset size.
+**3. Feature Extraction (The "Crunch")**
+Convert the 500GB of MP3s into a highly compressed mathematical cache. This process is highly parallelized but will take several hours.
+```cmd
+python extract_features_vggish.py
+```
+*Result: Generates `cached_dataset.pt` (approx. 250GB).*
 
-### 4. Training (The "Learning")
-This is where the AI actually learns. 
-* **Execution:** `python ai_backend/train.py`
-* **What to watch for:** * **Loss:** Should go down (target < 0.2).
-    * **Val Accuracy:** Should go up. We are aiming for **80%+** on the high-resolution run.
-* **Result:** It will save `emotion_model.pth`.
+**4. Training (The "Learning")**
+Train the Stateful LSTM to route all 195 acoustic tags through the 5-D aesthetic bottleneck.
+```cmd
+python train.py
+```
+*Result: Generates `emotion_model_v2.pth`.*
 
 ---
 
 ## 🧪 How to Verify "Success"
-1.  **Check the Tensor:** If `cached_dataset.pt` exists, the HuBERT pipeline is working.
-2.  **Check the Training:** If the `Val Accuracy` is significantly higher than 20% (random guess), the LSTM is successfully learning emotional patterns.
-3.  **Check the Model:** If `emotion_model.pth` is created, the "Soul" is ready for integration.
+1. **Extraction Integrity:** If `cached_dataset.pt` exists and is >100GB, the VGGish CNN successfully parsed the audio.
+2. **Training Convergence:** Watch the `Loss` metric during training. Because we use `BCEWithLogitsLoss` for 195 classes, the loss should steadily decrease over 50 epochs. 
+3. **Stateful Shape:** The final model output must successfully compress the data into a shape of `[Batch_Size, 5]`, representing the 5 core visual parameters for Unreal Engine.
+
+***

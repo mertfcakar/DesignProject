@@ -1,77 +1,116 @@
 import torch
 import os
-import pandas as pd
+import sys
 import numpy as np
-import torchaudio
+import librosa
+import csv
 
 # ==========================================
-# WP3: FIXED Feature Extraction (VGGish)
+# 🛠️ PATH & PACKAGE CONFIGURATION
 # ==========================================
+BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
+if BACKEND_DIR not in sys.path:
+    sys.path.insert(0, BACKEND_DIR)
 
+try:
+    from torchvggish.vggish import VGGish
+    print("✅ VGGish Package linked correctly.")
+except ImportError as e:
+    print(f"❌ Error: Could not find torchvggish package in {BACKEND_DIR}\n{e}")
+    exit()
+
+# ==========================================
+# 🚀 INITIALIZING MODEL & GPU
+# ==========================================
 print("🖥️ Initializing PyTorch and VGGish...")
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# Load VGGish
-vggish = torch.hub.load('harritaylor/torchvggish', 'vggish')
+VGGISH_URLS = {
+    'vggish': 'https://github.com/harritaylor/torchvggish/releases/download/v0.1/vggish-10086976.pth',
+    'pca': 'https://github.com/harritaylor/torchvggish/releases/download/v0.1/vggish_pca_params-970ea276.pth'
+}
+
+vggish = VGGish(urls=VGGISH_URLS)
 vggish.eval().to(device)
 
-TSV_PATH = "autotagging.tsv"
+# --- Paths ---
+TSV_PATH = os.path.join(BACKEND_DIR, "autotagging.tsv")
+OUTPUT_FILE = os.path.join(BACKEND_DIR, "cached_dataset.pt")
 AUDIO_DIR = "D:/MTG_Jamendo_Full"
-OUTPUT_FILE = "cached_dataset.pt"
 
-df = pd.read_csv(TSV_PATH, sep='\t')
-all_tags = sorted(list(set([tag for tags in df['tags'].dropna().str.split(',') for tag in tags])))
-tag_to_idx = {tag: i for i, tag in enumerate(all_tags)}
+# ==========================================
+# 📖 DATASET PARSING
+# ==========================================
+print(f"📖 Parsing Metadata from: {TSV_PATH}")
+tracks_metadata = []
+all_tags_set = set()
 
-features_list, labels_list = [], []
-
-print(f"🚀 Starting Extraction on {device}...")
-for index, row in df.iterrows():
-    tid = str(row['track_id']).replace('track_', '').lstrip('0')
-    file_path = os.path.join(AUDIO_DIR, f"{tid}.mp3")
+with open(TSV_PATH, 'r', encoding='utf-8') as f:
+    reader = csv.reader(f, delimiter='\t')
+    header = next(reader) 
     
-    if os.path.exists(file_path):
-        try:
-            # 1. Load the full audio first to check sample rate
-            waveform, sample_rate = torchaudio.load(file_path)
-            
-            # 2. BUG FIX: Resample to 16kHz if necessary
-            if sample_rate != 16000:
-                resampler = torchaudio.transforms.Resample(orig_freq=sample_rate, new_freq=16000)
-                waveform = resampler(waveform)
-                sample_rate = 16000
-            
-            # 3. Slice the first 30 seconds AFTER resampling
-            waveform = waveform[:, :30 * 16000]
-            
-            # 4. Convert to mono
-            if waveform.shape[0] > 1:
-                waveform = torch.mean(waveform, dim=0, keepdim=True)
+    for row in reader:
+        if len(row) < 6: continue 
+        
+        # FIXED: Index [3] is the 'path' column (e.g., '77/48077.mp3')
+        # Index [1] was the Artist ID, which caused the previous crash.
+        relative_path = row[3].strip().strip('"').strip("'")
+        
+        # Tags start from index [5]
+        tags = [t.strip().strip('"').strip("'") for t in row[5:] if t.strip()]
+        for tag in tags: all_tags_set.add(tag)
+        
+        tracks_metadata.append({'path': relative_path, 'tags': tags})
 
-            # 5. BUG FIX: Extract features properly. 
-            # The harritaylor repo handles the log-mel spectrogram conversion inside 'forward' 
-            # IF you pass it the correct 16kHz numpy array!
+all_tags = sorted(list(all_tags_set))
+tag_to_idx = {tag: i for i, tag in enumerate(all_tags)}
+print(f"✅ Found {len(tracks_metadata)} tracks and {len(all_tags)} unique tags.")
+
+# ==========================================
+# 🚀 EXTRACTION LOOP
+# ==========================================
+features_list = []
+labels_list = []
+found_any = False
+
+print(f"🚀 Starting Extraction on {len(tracks_metadata)} tracks...")
+
+for i, track_data in enumerate(tracks_metadata):
+    # This joins 'D:/MTG_Jamendo_Full' with '77/48077.mp3' correctly
+    file_path = os.path.normpath(os.path.join(AUDIO_DIR, track_data['path']))
+    
+    # Debug the first few paths to ensure they match your D: drive
+    if i < 3:
+        print(f"🔍 Checking path: {file_path}")
+
+    if os.path.exists(file_path):
+        found_any = True
+        try:
+            audio_np, _ = librosa.load(file_path, sr=16000, mono=True, duration=30.0)
+            if len(audio_np) < 16000: continue 
+                
             with torch.no_grad():
-                audio_np = waveform.squeeze().numpy()
-                # Skip files that are too short to generate a spectrogram patch
-                if len(audio_np) < 16000: continue 
-                embeddings = vggish.forward(audio_np, fs=sample_rate).cpu()
+                embeddings = vggish.forward(audio_np, fs=16000).cpu()
             
-            # Create Multi-Hot Label Vector
             label_vector = np.zeros(len(all_tags), dtype=np.float32)
-            for tag in str(row['tags']).split(','):
+            for tag in track_data['tags']:
                 if tag in tag_to_idx:
                     label_vector[tag_to_idx[tag]] = 1.0
             
             features_list.append(embeddings)
             labels_list.append(torch.tensor(label_vector))
             
-            if len(features_list) % 100 == 0:
+            if len(features_list) % 50 == 0:
                 print(f"✅ Processed {len(features_list)} tracks...")
                 
-        except Exception as e:
+        except Exception:
             continue
 
-print(f"💾 Saving to {OUTPUT_FILE}...")
+if not found_any:
+    print("\n❌ FATAL ERROR: Zero files found. Re-check your D: drive folders.")
+    print(f"Expected folder structure: {os.path.join(AUDIO_DIR, '00')}")
+    exit()
+
+print(f"\n💾 Saving to {OUTPUT_FILE}...")
 torch.save({"features": features_list, "labels": torch.stack(labels_list), "tags": all_tags}, OUTPUT_FILE)
-print("🎉 Extraction Complete!")
+print("🎉 Extraction Complete! You can now run train.py.")

@@ -1,11 +1,11 @@
 # --- Unreal Engine ---
-ue_project/Intermediate/
-ue_project/Saved/
-ue_project/Binaries/
-ue_project/DerivedDataCache/
-ue_project/Build/
-ue_project/.vs/
-ue_project/*.sln
+MusicAI_Visualizer/Intermediate/
+MusicAI_Visualizer/Saved/
+MusicAI_Visualizer/Binaries/
+MusicAI_Visualizer/DerivedDataCache/
+MusicAI_Visualizer/Build/
+MusicAI_Visualizer/.vs/
+MusicAI_Visualizer/*.sln
 
 # --- Python / AI ---
 __pycache__/
@@ -17,6 +17,7 @@ ai_backend/temp_extract/
 *.pth
 *.wav
 *.mp3
+*.onnx
 
 # --- System ---
 .DS_Store

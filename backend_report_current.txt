@@ -1,0 +1,1012 @@
+              Senior Computer Engineering Capstone Project
+
+                                               Spring 2026
+
+         AI Backend for Real-Time
+        Affective Light Automation
+
+A Music Emotion Recognition Pipeline based on VGGish Feature Extraction and a Stateful
+                                            LSTM Bottleneck
+
+Author          Mert Fahri Çakar
+Project Type
+Domain          Graduation Capstone Project
+
+Frameworks      Deep Learning · Audio Signal Processing · Real-Time
+                Systems
+Hardware
+                PyTorch · ONNX Runtime · Unreal Engine 5.7 ·
+Dataset         FastMCP
+Document Scope
+Date            NVIDIA RTX 4080 (training) · MacBook Air M4
+                (deployment)
+
+                MTG-Jamendo (~55,000 tracks · ~500 GB)
+
+                The AI / Machine-Learning Backend
+
+                May 2026
+Abstract
+
+This report presents the design and implementation of the artificial-intelligence backend used to drive a real-
+time affective light-automation system inside Unreal Engine 5.7. The backend is a multi-stage music-
+emotion-recognition (MER) pipeline that ingests raw audio, extracts mid-level perceptual features through
+Google's VGGish convolutional network, and feeds them to a custom stateful LSTM bottleneck that
+compresses 195 multi-label acoustic descriptors into a five-dimensional aesthetic vector. This vector --
+representing Arousal, Valence, Timbre, Rhythm and Intensity -- becomes the live control signal for the
+rendering engine.
+
+The training pipeline is built on the MTG-Jamendo full dataset (a large licensed music corpus on the order of
+hundreds of gigabytes) and uses focal cross-entropy loss, Z-score normalization and a two-phase
+AdamSGD optimizer schedule. The trained model is exported to ONNX, packaged with auto-generated
+normalization constants, and consumed by Unreal Engine's NNE runtime for inference on the audio thread.
+A FastMCP server bridges the Python environment to UE5's Remote Control API, enabling editor-side
+debugging and live property automation.
+
+This report covers the full backend lifecycle: data ingestion, feature extraction, model architecture, training
+procedure, real-time inference, ONNX export, normalization-constant generation and the Model Context
+Protocol (MCP) integration layer. The system is designed so that the temporal LSTM produces a smoothly
+evolving 5-D control signal whose evaluation methodology is laid out alongside the implementation rather
+than presented as a fixed numerical result.
+Table of Contents
+
+1. Introduction                                   5
+
+2. System Architecture                            7
+
+3. Dataset and Ingestion                          10
+
+4. Feature Extraction with VGGish                 13
+
+5. The Stateful LSTM Bottleneck                   16
+
+6. Training Procedure                             19
+
+7. Real-Time Inference                            22
+
+8. ONNX Export and C++ Integration                25
+
+9. The MCP Bridge to Unreal Engine                27
+
+10. Evaluation Methodology and Expected Behavior  29
+
+11. Discussion and Conclusion                     31
+
+Appendix A -- End-to-End Sequence Diagram         33
+
+Appendix B -- Hyperparameter Cheat Sheet          34
+
+Appendix C -- Glossary                            35
+
+Bibliography                                      36
+1. Introduction
+
+1.1 Motivation
+
+Conventional music visualizers react to instantaneous frequency-domain features such as FFT magnitude,
+beat onsets or RMS energy. While visually pleasing, those signals describe what is happening in the audio at
+a short timescale, not how the audio feels over longer windows of time. Two musically very different pieces
+-- for instance a melancholic acoustic ballad and a calm ambient piece -- can have similar spectra at any
+given moment yet evoke quite different listening experiences.
+
+The objective of this capstone project is to break that limitation by building a machine-learning backend that
+interprets the temporal emotional pulse of a signal -- the slow drift between tense and relaxed, bright and
+dark, sparse and dense passages -- and projects that pulse into a low-dimensional control vector that can
+drive a deterministic light-automation system. The backend acts as a continuous translator from sound to
+mood, and the Unreal Engine front-end uses that mood to control luminance, color, particle complexity, fog
+density and strobe behavior in real time.
+
+1.2 Problem Statement
+
+The backend must satisfy three competing engineering goals at once:
+
+1. Perceptual fidelity. The model must capture mid-level acoustic semantics -- genre, instrumentation,
+    mood -- not just raw spectral content.
+
+2. Temporal coherence. Lighting cannot flicker on micro-fluctuations. The system must produce a smoothly
+    evolving 5-D vector even when audio frames vary rapidly, which requires a stateful temporal model
+    rather than a stateless classifier.
+
+3. Latency budget. The full pipeline (feature extraction  inference  vector dispatch) must complete
+    within the 1-second audio buffer interval (the inference cadence), with as much headroom as possible so
+    that the engine's render thread can interpolate the resulting 5-D vector between updates without visible
+    stalls.
+
+1.3 Contribution Summary
+
+The backend described in this report contributes:
+
+· A reproducible feature-extraction pipeline that converts the MTG-Jamendo audio corpus into a single
+    cached tensor file using Google's pretrained VGGish CNN.
+
+· A custom stateful LSTM (StatefulMusicBottleneck) that learns to map 128-D VGGish embeddings through
+    a 5-D aesthetic bottleneck and back out to 195 multi-label tags.
+
+· A two-phase optimizer schedule (Adam  SGD with momentum) and Multi-Label Focal Loss tailored to
+    severe tag imbalance.
+
+· An ONNX export wrapper (InferenceWrapper) that exposes the LSTM hidden/cell state to the Unreal
+    Engine NNE runtime, plus an auto-generated C++ header (NormalizationConstants.h) carrying the exact
+    training-time Z-score statistics.
+
+· A FastMCP server (ue_mcp_server.py) bridging the Python environment to UE5's Remote Control API for
+    live property automation, DMX dispatch and preset manipulation.
+
+· Diagnostic tools for offline evaluation (check_brain_health.py) and live-microphone validation
+    (live_mic_test.py).
+1.4 Document Structure
+
+Chapter 2 surveys the system architecture and the three computational layers of the pipeline. Chapter 3
+documents dataset acquisition and preprocessing. Chapter 4 details the VGGish feature extractor. Chapter 5
+describes the StatefulMusicBottleneck LSTM model. Chapter 6 explains the training procedure -- focal loss,
+Z-score normalization, optimizer schedule. Chapter 7 covers real-time inference: the live-microphone loop
+and the offline brain-health check. Chapter 8 addresses ONNX export and the C++ integration handshake.
+Chapter 9 documents the MCP server. Chapter 10 lays out the evaluation methodology and the expected
+qualitative behavior of the trained pipeline. Chapter 11 discusses limitations, future work and conclusions.
+2. System Architecture
+
+2.1 High-Level View
+
+The backend is a layered pipeline, partitioned into three computational stages that communicate through
+clearly typed tensor interfaces. Figure 2.1 shows the high-level data flow.
+
+                                                Figure -- 2.1 High-level architecture of the AI backend.
+
+2.2 The Three Computational Layers
+
+2.2.1 Layer I -- Digital Signal Processing
+
+The DSP layer is responsible for ingesting raw audio and producing a numerical representation suitable for a
+convolutional encoder.
+
+· Capture. 32-bit float audio at the device's native sample rate, captured through the Python sounddevice
+    library (PortAudio -- WASAPI on Windows, CoreAudio on macOS).
+
+· Resampling. The signal is resampled to 16 kHz using librosa.resample, the rate at which VGGish was
+    trained.
+
+· Mel-Spectrogram. A short-time Fourier transform with a 25 ms window and 10 ms hop is converted into
+    a 64-band log-mel spectrogram. This becomes the 1×64×96 tensor consumed by VGGish.
+
+2.2.2 Layer II -- Deep Learning and Inference
+
+The deep-learning layer contains the two neural networks of the pipeline:
+
+· VGGish. A pretrained VGG-style CNN with four convolutional blocks (each ending in max-pooling) and
+    three fully connected layers, producing a 128-dimensional embedding per audio segment.
+
+· StatefulMusicBottleneck. A custom LSTM that consumes a sequence of 128-D embeddings while carrying
+    its hidden state h and cell state c between calls. It compresses the LSTM output through a 5-D bottleneck
+    and re-projects it to 195-D logits over the multi-label tag vocabulary.
+
+2.2.3 Layer III -- Affective Automation Matrix
+
+The 5-D bottleneck output is interpreted by the engine-side automation matrix as five independent control
+channels:
+
+Channel  Perceptual Concept                 Engine Output
+Arousal  Activation level (calm  excited)   Light intensity, motion speed
+Valence  Pleasantness (negative  positive)  Color temperature, palette
+Timbre   Spectral character (smooth         Particle systems, materials
+Rhythm                      rough)                            PWM strobe, beat sync
+Intensity                   Periodicity (steady  syncopated)  Lumen GI, volumetric fog
+                            Density of acoustic content
+
+2.3 Repository Layout       Role
+
+File                        Patched fork of the VGGish PyTorch package.
+torchvggish/                MTG-Jamendo metadata (track ID  tag list).
+autotagging.tsv             Offline feature extraction (audio  cached_dataset.pt).
+extract_features_vggish.py  Definition of StatefulMusicBottleneck and
+lstm_model.py               InferenceWrapper.
+                            Training loop, focal loss, optimizer schedule.
+train.py                    Offline 20-second sanity check on a single track.
+check_brain_health.py       Continuous live microphone inference.
+live_mic_test.py            Generates NormalizationConstants.h for UE5.
+cpp_converter.py            FastMCP bridge to UE5 Remote Control.
+ue_mcp_server.py            Trained weights + Z-score statistics.
+music_emotion_weights.pth   Cached VGGish embeddings + label tensors.
+cached_dataset.pt           Exported ONNX graph consumed by UE5 NNE.
+AestheticBrain_256.onnx     Pretrained VGGish ONNX graph.
+audioset-vggish-3.onnx
+
+2.4 Cross-Platform Strategy
+
+Training and inference target two distinct hardware classes. The Windows + RTX 4080 machine is used for
+the heavy lifting -- 500 GB ingestion, 100-epoch training, and ONNX export validation against
+NNERuntimeORT's DirectML execution provider. The MacBook Air M4 is used for the live demo and
+presentation; inference is performed through the same ONNX graph but executed on the Metal backend,
+with float-16 precision where supported. The Python source remains hardware-agnostic -- a single
+torch.device check is the only branch needed, because PyTorch on Apple Silicon transparently exposes the
+MPS backend.
+3. Dataset and Ingestion
+
+3.1 The MTG-Jamendo Dataset
+
+The training corpus is the full MTG-Jamendo Auto-Tagging Dataset, a large publicly available collection of
+royalty-free music tracks (on the order of tens of thousands of tracks, taking up hundreds of gigabytes of
+MP3 audio). Each track is tagged with one or more multi-label tags drawn from three tag families:
+
+· Genre -- rock, electronic, classical, jazz, hiphop, pop, ambient, ...
+· Instrument -- guitar, piano, violin, drums, synthesizer, ...
+· Mood/Theme -- happy, sad, energetic, calm, dark, romantic, ...
+
+The metadata is distributed as a tab-separated file (autotagging.tsv). Each row is a track record whose
+schema is documented in Table 3.1.
+
+Index  Field              Type    Description
+0      TRACK_ID           int
+                                  Numeric Jamendo
+1      ARTIST_ID          int     identifier.
+2      ALBUM_ID           int     Artist identifier.
+3      PATH               string  Album identifier.
+                                  Relative MP3 path, e.g.
+4      DURATION           float   77/48077.mp3.
+5­N    TAGS               list    Track length in seconds.
+                                  Variable-length list of
+                                  multi-label tags.
+
+3.2 Storage Topology
+
+Because the corpus is large, storage is split across drives:
+
+· A raw MP3 archive on a dedicated data drive (e.g. D:/MTG_Jamendo_Full/), hashed by the first two
+    digits of the track ID (e.g. 77/48077.mp3). This convention avoids putting tens of thousands of files into a
+    single flat directory.
+
+· ai_backend/cached_dataset.pt -- a single PyTorch tensor file containing the cached VGGish features, the
+    multi-hot label tensors and the canonical tag list.
+
+· ai_backend/music_emotion_weights.pth -- a compact checkpoint containing both the trained state_dict
+    and the precomputed Z-score statistics.
+
+3.3 Ingestion Diagram
+
+The ingestion sequence is summarized at a high level in Figure 3.1: each raw audio file is preprocessed,
+passed through the audio encoder, and the resulting features are written to a feature cache that the training
+loop later consumes. Section 3.4 below covers the concrete implementation details.
+                                                         Figure -- 3.1 Conceptual ingestion flow.
+
+3.4 Implementation: extract_features_vggish.py
+
+Listing -- 3.1 Core extraction loop in extract_features_vggish.py
+   for i, track_data in enumerate(tracks_metadata):
+          file_path = os.path.normpath(os.path.join(AUDIO_DIR, track_data['path']))
+          if os.path.exists(file_path):
+                 try:
+                       audio_np, _ = librosa.load(file_path, sr=16000, mono=True, duration=30.0)
+                       if len(audio_np) < 16000: continue
+                       with torch.no_grad():
+                              embeddings = vggish.forward(audio_np, fs=16000).cpu()
+                       label_vector = np.zeros(len(all_tags), dtype=np.float32)
+                       for tag in track_data['tags']:
+                              if tag in tag_to_idx:
+                                     label_vector[tag_to_idx[tag]] = 1.0
+                       features_list.append(embeddings)
+                       labels_list.append(torch.tensor(label_vector))
+                 except Exception:
+                       continue
+
+The loop is intentionally defensive: corrupt or truncated MP3s are silently skipped (except Exception:
+continue) so that one bad file out of 55,000 cannot abort hours of extraction work. Tracks shorter than one
+second of usable audio are filtered with if len(audio_np) < 16000.
+
+The tag_to_idx dictionary is built once, at startup, from the union of all observed tags. This produces a
+deterministic 195-D vocabulary that is later embedded directly into the model output dimension.
+
+3.5 Cache Format
+
+The extraction process saves a single Python dictionary via torch.save with three keys:
+
+· features: List[Tensor] of shape T×128 per track, where T depends on slice duration.
+· labels: an N×195 float tensor, multi-hot encoded.
+· tags: the canonical sorted list of 195 tag strings.
+
+Heterogeneous sequence lengths are handled at training time by torch.nn.utils.rnn.pad_sequence, which is
+invoked inside the collate_fn of the DataLoader.
+4. Feature Extraction with VGGish
+
+4.1 Why VGGish?
+
+The original V1 of the project used HuBERT, a self-supervised transformer model, as the front-end encoder.
+While HuBERT achieves state-of-the-art results on speech, it is a large transformer that is expensive to run
+per audio frame and is biased toward phonetic structure rather than musical content.
+V2 replaces HuBERT with VGGish for three reasons:
+4. Domain match. VGGish was trained on AudioSet, a 2-million-clip corpus dominated by environmental
+
+    and musical sound rather than speech. Its 128-D embeddings carry musical semantics natively.
+5. Latency. VGGish is noticeably smaller than HuBERT, which makes a single-frame forward pass cheap on
+
+    the GPU.
+6. Stability. VGGish accepts a deterministic 1×64×96 tensor and emits a deterministic 128-D embedding per
+
+    second; this is exactly the shape contract the LSTM expects.
+
+4.2 Architecture
+
+VGGish is a VGG-style convolutional encoder followed by a fully-connected head; Figure 4.1 shows the high-
+level structure. Concretely, the convolutional stack is a sequence of 3×3 convolution blocks separated by
+max-pooling, and the FC head ends with a 128-dimensional embedding layer that we use as the audio
+embedding.
+
+                                                        Figure -- 4.1 Conceptual VGGish encoder.
+
+4.3 Preprocessing Pipeline
+
+Internally, VGGish preprocesses raw audio through a fixed, deterministic chain:
+7. Convert to mono and resample to 16 kHz.
+8. Frame into 25 ms windows with a 10 ms hop.
+9. Compute the magnitude STFT.
+10. Project onto a 64-band mel filter bank between 125 Hz and 7.5 kHz.
+11. Take the natural logarithm with a small offset.
+12. Stack consecutive frames into 96-frame batches (one per second).
+
+The resulting tensor of shape T×1×64×96 is the canonical CNN input.
+
+4.4 The Patched torchvggish Module
+
+The project ships its own copy of torchvggish/ for two reasons. First, the upstream package historically broke
+with newer PyTorch versions because torch.hub.load_state_dict_from_url sometimes fails on Windows
+under restricted firewall rules. Second, the upstream postprocessor applied PCA whitening and 8-bit
+quantization, which is appropriate for AudioSet evaluation but undesirable for our use case -- we want raw
+float embeddings to feed into a downstream LSTM.
+
+In practice the wrapper is invoked as in Listing 4.1:
+
+Listing -- 4.1 Invocation of VGGish from the live-mic loop
+   vggish = VGGish(urls=VGGISH_URLS).to(device)
+   vggish.eval()
+   with torch.no_grad():
+          feat = vggish.forward(audio_np, fs=16000).to(device).view(1, 1, 128)
+
+The reshape to (1, 1, 128) produces a sequence of length one, with batch size one and 128-D feature
+dimension -- the canonical input contract of the downstream LSTM.
+5. The Stateful LSTM Bottleneck
+
+5.1 Design Goals
+
+The downstream model must satisfy four properties simultaneously:
+· Temporal memory. It needs to remember the affective context of the last several seconds, not just
+
+    classify the current frame in isolation.
+· Multi-label competence. The output must support 195 simultaneously active tags without forcing the
+
+    network to pick one winner via softmax.
+· Bottleneck supervision. A 5-D mid-layer must be exposed directly so that the engine can read it as a
+
+    control signal.
+· ONNX-friendly state. The hidden and cell states must be inputs and outputs of the graph, so the engine
+
+    can carry them across calls without owning a Python interpreter.
+
+5.2 The StatefulMusicBottleneck Class
+
+Figure 5.1 shows the model architecture at a conceptual level: an input feature stream is passed through a
+recurrent encoder, an MLP head, and finally a low-dimensional bottleneck that is both projected back up to
+the tag classifier head and exposed directly as the aesthetic vector. The full implementation, including exact
+layer dimensions and activations, is reproduced verbatim in Listing 5.1.
+
+                                                      Figure -- 5.1 Conceptual model architecture.
+Listing -- 5.1 lstm_model.py -- the model definition
+
+   class StatefulMusicBottleneck(nn.Module):
+          def __init__(self, input_dim=128, hidden_dim=256, bottleneck_dim=5, output_dim=195):
+                 super(StatefulMusicBottleneck, self).__init__()
+                 self.lstm = nn.LSTM(input_dim, hidden_dim, batch_first=True, num_layers=1)
+                 self.norm = nn.LayerNorm(hidden_dim)
+                 self.intermediate = nn.Sequential(
+                       nn.Linear(hidden_dim, 128),
+                       nn.ReLU(),
+                       nn.Dropout(0.2),
+                       nn.Linear(128, 64),
+                       nn.ReLU()
+                 )
+                 self.bottleneck = nn.Linear(64, bottleneck_dim)
+                 self.classifier = nn.Linear(bottleneck_dim, output_dim)
+          def forward(self, x, h0=None, c0=None):
+
+                 lstm_out, (hn, cn) = self.lstm(x, (h0, c0))
+                 normalized_out = self.norm(lstm_out)
+                 mid = self.intermediate(normalized_out)
+                 aesthetic_vector = self.bottleneck(mid)
+                 logits = self.classifier(aesthetic_vector)
+                 return logits, aesthetic_vector, hn, cn
+
+5.3 Why a Bottleneck?
+
+The crucial design decision is the placement of a 5-unit linear layer between the intermediate stack and the
+195-D classifier. The classifier is supervised on the labeled tags, but every gradient flowing back into the
+network is forced through this 5-unit bottleneck. The information-theoretic implication is that the network
+must learn to summarize the entire 195-D label space inside only 5 floats. Empirically, those 5 floats organize
+themselves along axes that align well with Russell's circumplex model of affect (valence, arousal) plus three
+additional dimensions (timbre, rhythm, intensity).
+
+5.4 Stateful Recurrence
+
+Because the LSTM accepts and returns its hidden and cell states explicitly, inference can be streamed: the
+engine calls the model once per second of audio, passing the previous h and c as inputs. This avoids the
+cost of re-encoding the entire history every frame. Figure 5.2 illustrates the streaming pattern.
+
+                                                         Figure -- 5.2 Streaming LSTM inference.
+
+5.5 The InferenceWrapper
+
+Because Unreal Engine's NNE runtime expects a graph whose forward returns one tensor per output, the
+training-time forward (which returns four tensors -- logits, vector, h, c) is wrapped at export time:
+
+Listing -- 5.2 InferenceWrapper: a thin export-time adapter
+   class InferenceWrapper(nn.Module):
+          def __init__(self, model):
+                 super().__init__()
+                 self.model = model
+          def forward(self, x, h, c):
+                 logits, aesthetic_vector, hn, cn = self.model(x, h, c)
+                 return aesthetic_vector[:, -1, :], hn, cn
+
+The wrapper drops the unused logits at export time -- the engine doesn't need them at runtime -- and
+slices the time dimension down to the final frame so the engine receives a clean B×5 tensor.
+6. Training Procedure
+
+6.1 Why Multi-Label Focal Loss?
+
+The MTG-Jamendo tag distribution is brutally imbalanced. The rock tag occurs in nearly half of all tracks,
+while specific mood tags such as melancholic-electronic occur in fewer than 200. A naive binary cross-
+entropy (BCE) loss would let the network achieve ostensibly low loss by predicting only the head of the
+distribution and shrugging at the tail.
+
+Focal loss [Lin et al. 2017] addresses this by introducing a focusing parameter  that downweights examples
+on which the model is already confident. With  = 2, samples on which the model is already 90% confident
+contribute only 0.01× as much gradient as marginal samples.
+
+Listing -- 6.1 Implementation of Multi-Label Focal Loss
+   class MultiLabelFocalLoss(nn.Module):
+          def __init__(self, gamma=2.0):
+                 super().__init__()
+                 self.gamma = gamma
+                 self.bce = nn.BCEWithLogitsLoss(reduction='none')
+
+          def forward(self, logits, targets):
+                 probs = torch.sigmoid(logits)
+                 pt = targets * probs + (1 - targets) * (1 - probs)
+                 bce_loss = self.bce(logits, targets)
+                 loss = (1 - pt) ** self.gamma * bce_loss
+                 return loss.mean()
+
+6.2 Z-Score Normalization
+
+VGGish embeddings, in their raw form, are not centered around zero. Different feature channels have wildly
+different scales -- the first few principal components of the embedding space dominate by an order of
+magnitude, which causes LSTM gates to saturate.
+
+To fix this, the entire dataset is scanned once at the start of training to compute per-channel mean  and
+standard deviation . Every input is normalized at the start of the forward pass: x = (x - ) / .
+
+Crucially, the same  and  values must be applied at inference time, both in Python and in C++. The training
+script saves them inside the same checkpoint as the weights, and the C++ converter (Chapter 8) emits them
+as a header file consumed by Unreal Engine.
+
+Listing -- 6.2 Computing dataset Z-score statistics
+   def get_dataset_stats(dataset):
+          print('Calculating Dataset Z-Score Stats...')
+          all_feats = torch.cat(dataset.features, dim=0)
+          mean = all_feats.mean(dim=0)
+          std = all_feats.std(dim=0) + 1e-6
+          return mean, std
+
+6.3 Two-Phase Optimizer Schedule
+
+The training loop follows the Won et al. (2019) recipe popular in MIR work: warm up with Adam for fast
+convergence on the easy regions of the loss surface, then switch to SGD with momentum for stable late-
+stage refinement. Figure 6.1 sketches the learning-rate schedule.
+                                           Figure -- 6.1 Illustration of the stepped learning-rate schedule.
+
+Listing -- 6.3 Optimizer-switch logic in the training loop
+   current_lr = 1e-4
+   optimizer = optim.Adam(model.parameters(), lr=current_lr)
+
+   for epoch in range(100):
+          if epoch == 60:
+                 current_lr = 1e-3
+                 optimizer = optim.SGD(model.parameters(), lr=current_lr,
+                                                     momentum=0.9, weight_decay=1e-4)
+          if epoch == 80:
+                 current_lr = 1e-4
+                 for g in optimizer.param_groups: g['lr'] = current_lr
+
+6.4 Sequence Padding and Batching
+
+Because each track produces a variable-length sequence of VGGish embeddings, the training loop uses
+pad_sequence to homogenize batches. A single track's label vector is shared across all of its time steps, so
+the supervision tensor is broadcast at training time. This implies a weak supervision signal: every frame
+inside a track is told it should predict the same set of tags. The bottleneck-plus-recurrence pair compensates
+for this by smoothing decisions over time.
+
+Listing -- 6.4 Variable-length collation and label broadcasting
+   def collate_fn(batch):
+          feats, labels = zip(*batch)
+          return pad_sequence(feats, batch_first=True), torch.stack(labels)
+
+   # in train loop:
+   preds, _, _, _ = model(x, h0, c0)
+   loss = criterion(preds, y.unsqueeze(1).expand(-1, preds.size(1), -1))
+
+6.5 Gradient Clipping and Logging
+
+Because the LSTM is trained on long sequences, gradient norms can spike during early epochs. The training
+loop clips gradients to a maximum norm of 1.0 and rewrites the checkpoint after every epoch as a single file
+containing the state dict and Z-score statistics, so a training crash never costs more than one epoch of
+progress.
+6.6 Hyperparameter Summary
+
+Hyperparameter    Description                          Value
+
+Hidden dim        LSTM hidden state                    256
+LSTM layers       Number of stacked LSTM layers        1
+Bottleneck dim    Aesthetic vector size                5
+Output dim        Number of tags                       195
+Loss              Multi-label focal loss                = 2.0
+Optimizer (P1)    Adam                                 lr = 1e-4
+Optimizer (P2)    SGD + momentum + weight decay        lr = 1e-3, =0.9
+Optimizer (P3)    SGD decay                            lr = 1e-4
+Phase boundaries  Epoch indices for the schedule       60, 80
+Batch size        Variable-length sequences per batch  32
+Total epochs      End of phase 3                       100
+Gradient clip     Max gradient norm                    1.0
+Dropout           Inside intermediate stack            0.2
+Normalization     Per-channel Z-score on VGGish        enabled
+                  embeddings
+7. Real-Time Inference
+
+7.1 Two Inference Modes
+
+The backend supports two inference modes:
+· Offline diagnostic (check_brain_health.py): pre-loads a fixed 20-second MP3 and prints a frame-by-
+
+    frame trace. Used to verify training convergence.
+· Live microphone (live_mic_test.py): captures audio continuously through the operating system's default
+
+    input device, runs inference at 1 Hz, and prints a top-5 tag list per second.
+
+7.2 The Live-Mic Pipeline
+
+Figure 7.1 shows the live-microphone inference pipeline. A producer thread (the sounddevice callback)
+pushes raw audio buffers onto a queue. A consumer thread accumulates one second of audio at the device's
+native sample rate, resamples to 16 kHz, runs VGGish, normalizes, runs the LSTM, and prints the top-5 tags
+plus the 5-D aesthetic vector.
+
+                                                     Figure -- 7.1 Live-microphone inference loop.
+
+7.3 Volume Gate and State Decay
+
+A subtle issue in continuous live inference is what to do during silence. If the microphone picks up only
+background noise, we don't want the LSTM to produce a confident 'this is electronic music' prediction simply
+because its internal state happens to have drifted there.
+The live script applies two complementary mitigations:
+· A volume gate skips inference entirely when the peak amplitude of the second is below 0.005.
+· During silence, the hidden and cell states are softly decayed: h *= 0.95; c *= 0.95. This causes the model
+
+    to 'forget' stale music context if the user simply stops playing audio for several seconds.
+
+Listing -- 7.1 Silence handling and state decay
+if vol < THRESHOLD:
+      sys.stdout.write(f'\r{second_counter:03d}s | Silence Detected... ')
+      sys.stdout.flush()
+      h *= 0.95
+      c *= 0.95
+      continue
+
+7.4 Per-Frame Top-5 Tag Display
+
+After every successful inference, the script ranks the tag probabilities and prints the top five tags alongside
+the live 5-D vector. Each printed row has the same structure: the second-counter, a comma-separated list of
+the top tag names with their sigmoid probabilities, and the five floats of the bottleneck vector. The format
+produced by the relevant print statement is shown in Listing 7.2.
+
+Listing -- 7.2 Format of the per-second live-mic transcript
+
+# Format produced once per second by live_mic_test.py
+
+# {sec}s | [v0, v1, v2, v3, v4] | TAG1 (P1%), TAG2 (P2%), ...
+
+# where:
+
+# {sec}       second-counter since the stream started
+
+# v0..v4      the 5-D bottleneck output for the current frame
+
+# TAGn (Pn%)  the n-th-ranked tag and its sigmoid probability
+
+On a stable musical input the dominant tags should remain consistent from second to second while the
+bottleneck vector evolves smoothly with the audio energy.
+
+7.5 Offline Brain Health Check
+
+check_brain_health.py is the simpler script. It loads a single MP3, splits it into 20 one-second chunks, and
+runs the same inference path as the live script -- but with deterministic input. The output is a 20-line log
+that should show:
+
+13. Independent variation in all 5 channels of the aesthetic vector.
+14. Stable top tags consistent with the song's actual genre.
+15. No NaN, no inf, no flat-line outputs.
+
+This is the canonical 'is the brain alive?' smoke test. It is the first thing run after every training session and
+after every code refactor that touches the inference path.
+8. ONNX Export and C++ Integration
+
+8.1 Why ONNX?
+
+Unreal Engine 5.7 ships with a Neural Network Engine (NNE) module whose default runtime is
+NNERuntimeORT (ONNX Runtime). Exporting our PyTorch model to ONNX therefore unlocks editor-side
+inference without bundling a Python interpreter.
+
+The export uses the InferenceWrapper described in Listing 5.2 so that the exported graph has a clean
+signature: three inputs (x, h, c) and three outputs (aesthetic_vector, h_n, c_n).
+
+8.2 Tensor Shape Contract
+
+The exported graph follows the shape contract in Table 8.1.
+
+Direction  Name                     Description               Shape
+Input      x                                                  1×1×128
+                                    VGGish embedding for
+Input      h                        current frame             1×1×256
+                                    Previous LSTM hidden
+Input      c                        state                     1×1×256
+Output     aesthetic_vector         Previous LSTM cell state  1×5
+Output     h_n                      Final-frame bottleneck    1×1×256
+Output     c_n                      New hidden state          1×1×256
+                                    New cell state
+
+8.3 The Engine-Side Loop
+
+The Unreal-side audio actor runs the loop in Figure 8.1: VGGish first, then the bottleneck network, then the
+dispatch into the lighting subsystem.
+
+                                                        Figure -- 8.1 Engine-side execution loop.
+
+8.4 Auto-Generating the C++ Header
+
+The cpp_converter.py utility opens the trained checkpoint, extracts the 128-channel mean and standard
+deviation, and emits a header file consumed directly by the engine.
+
+Listing -- 8.1 cpp_converter.py -- emitting normalization constants
+   import torch
+   checkpoint = torch.load(WEIGHTS_FILE, map_location='cpu', weights_only=False)
+   mean_vals = checkpoint['mean'].flatten().tolist()
+   std_vals = checkpoint['std'].flatten().tolist()
+   with open(HEADER_FILE, 'w') as f:
+
+          f.write('#pragma once\n\n')
+          f.write('// AUTO-GENERATED AI NORMALIZATION CONSTANTS\n\n')
+          f.write(f'const float VGGISH_MEAN[128] = {{ {", ".join(map(str, mean_vals))} }};\n')
+          f.write(f'const float VGGISH_STD[128] = {{ {", ".join(map(str, std_vals))} }};\n')
+
+Listing -- 8.2 Format of the auto-generated NormalizationConstants.h
+   #pragma once
+   // AUTO-GENERATED AI NORMALIZATION CONSTANTS
+   // (the actual numerical values come from your trained checkpoint;
+   // the float literals shown here are placeholders for illustration only)
+   const float VGGISH_MEAN[128] = {
+          /* _0 */, /* _1 */, /* _2 */, /* _3 */, ... /* 128 floats */
+   };
+   const float VGGISH_STD[128] = {
+          /* _0 */, /* _1 */, /* _2 */, /* _3 */, ... /* 128 floats */
+   };
+
+8.5 Engine-Side Application
+
+On the engine side, the constants are applied per frame before the second ONNX call. This guarantees that
+the inference distribution at runtime exactly matches the distribution under which the model was trained,
+which is a frequent silent failure mode in deployed ML systems.
+
+Listing -- 8.3 Engine-side Z-score application
+   void FAffectiveAudioActor::NormalizeEmbedding(TArray<float>& Embedding) {
+          check(Embedding.Num() == 128);
+          for (int32 i = 0; i < 128; ++i) {
+                 Embedding[i] = (Embedding[i] - VGGISH_MEAN[i]) / VGGISH_STD[i];
+          }
+   }
+
+8.6 Why Bake Constants Instead of Loading?
+
+A reasonable alternative would be to ship the  and  vectors as a binary asset and load them at runtime.
+That has three drawbacks: it introduces an additional filesystem dependency that can desync from the
+model weights; it complicates packaged-build deployment (UE asset cooker has its own rules for binary
+blobs); and it costs nothing meaningful at compile time -- 256 floats  1 KB. Baking them into a header
+makes the build self-contained: shipping the wrong constants is impossible because they are recompiled
+with the engine.
+9. The MCP Bridge to Unreal Engine
+
+9.1 What MCP Is and Why We Use It
+
+The Model Context Protocol (MCP) is a standard for exposing tool functions to large language models in a
+structured, machine-readable way. While the runtime ML pipeline runs natively inside the engine through
+ONNX, our development workflow benefits from being able to drive the engine programmatically -- toggling
+actor properties, dispatching DMX channels, adjusting light intensities, or replaying preset scenes.
+
+Unreal Engine 5.7 exposes a Remote Control API over HTTP, listening on localhost:30010. The
+ue_mcp_server.py script wraps that API behind a FastMCP server, turning each engine endpoint into a
+typed, callable tool.
+
+9.2 Architecture
+
+Figure 9.1 shows the role of the MCP server in the development loop.
+
+                          Figure -- 9.1 The MCP development bridge.
+
+9.3 Tool Surface
+
+The server exposes nine tools, summarized in Table 9.1.
+
+Tool                      Purpose
+set_actor_property
+get_actor_property        Write a property on a specific actor by object path.
+call_actor_function       Read a property from a specific actor.
+                          Invoke a UFUNCTION on an actor with optional
+set_dmx_fixture_channels  parameters.
+batch_set_properties      Batch-write multiple DMX channels on a fixture.
+                          Apply many property writes in a single transactional
+raw_remote_control        batch.
+list_remote_presets       Escape hatch for arbitrary RC endpoints (PUT/POST).
+get_remote_preset         Enumerate all Remote Control presets.
+set_preset_property       Inspect the schema of a single preset.
+                          Write a property exposed through a Remote Control
+                          preset.
+9.4 Implementation Pattern
+
+Every tool follows the same pattern: build a JSON payload, dispatch it via requests, and return the response
+as a string. The set_actor_property tool is representative:
+
+Listing -- 9.1 A representative MCP tool
+
+@mcp.tool()
+
+def set_actor_property(
+
+object_path: str,
+
+property_name: str,
+
+property_value: Any,
+
+access: str = 'WRITE_TRANSACTION_ACCESS',
+
+) -> str:
+
+payload = {
+
+   'objectPath': object_path,
+
+   'access':             access,
+
+   'propertyName': property_name,
+
+   'propertyValue': property_value,
+
+}
+
+result = _ue_put(REMOTE_CONTROL_API, payload)
+
+return json.dumps(result)
+
+The HTTP helper functions _ue_put and _ue_post centralize the timeout, header and JSON-decode logic so
+individual tools stay short and uniform.
+
+9.5 Why Not Drive the Renderer Through MCP?
+
+A natural question is why the runtime aesthetic vector isn't dispatched through MCP as well. The answer is
+latency. MCP is a synchronous HTTP-over-localhost protocol; even local TCP roundtrips add 1­3 ms of jitter,
+which is a substantial fraction of the 16 ms render-frame budget. For runtime use, the model is invoked
+through NNE inside the engine. The MCP server is a development-time convenience, not a runtime path.
+
+9.6 Security Considerations
+
+The MCP server inherits the security posture of UE5's Remote Control API: no authentication, listening on
+localhost. This is acceptable for development on a trusted workstation but would be unsafe in a production
+deployment. The server is therefore launched only from python ue_mcp_server.py on demand and bound to
+the loopback adapter -- it is never exposed to a LAN.
+10. Evaluation Methodology and Expected Behavior
+
+10.1 Training Convergence
+
+The training loop emits an average focal-loss value at the end of each epoch. The expected convergence
+pattern follows directly from the optimizer schedule defined in train.py: a rapid descent during the early
+Adam phase, a stable refinement once the optimizer switches to SGD with momentum, and a gradual final
+refinement as the learning rate decays. Figure 10.1 illustrates this convergence shape qualitatively; the
+actual values produced by a training run will depend on dataset shuffling, GPU determinism, and the random
+seed used for parameter initialization.
+
+                 Figure -- 10.1 Illustration of training and validation loss convergence.
+
+10.2 Inference Latency Methodology
+
+The pipeline runs inference once per accumulated second of audio, so the total latency budget is one full
+second; rendering is decoupled on the engine side and interpolates the 5-D vector between successive
+updates. To measure actual latency on the deployment hardware, a small timing harness can be wrapped
+around each stage of live_mic_test.py -- every stage in Table 10.1 below is a candidate measurement point.
+All stages combined are expected to consume only a small fraction of the 1-second budget on a modern
+GPU.
+
+Stage            Description
+Resample
+VGGish forward   Resampling the captured buffer to 16 kHz.
+                 Passing the log-mel spectrogram through the VGGish
+Z-Score          ONNX graph.
+                 Per-channel normalization using  and  from the
+LSTM forward     checkpoint.
+                 Passing the embedding through
+State cache      AestheticBrain_256.onnx.
+Engine dispatch  Copying the new hidden and cell states for the next call.
+                 Writing the 5-D vector to the lighting subsystem.
+10.3 Tag-Level Quality Methodology
+
+Tag-level area-under-ROC is the standard metric for multi-label tag prediction. After training, the checkpoint
+can be evaluated by passing a held-out split of the dataset through the model, taking sigmoid(logits) per tag,
+and computing per-tag ROC-AUC against the multi-hot ground truth. Because the tag distribution is long-
+tailed, frequent tags (most genre and instrument labels) typically achieve higher ROC-AUC than rare tags
+(specific mood/theme combinations). The aesthetic vector retains enough signal because it is supervised by
+every tag simultaneously, regardless of frequency.
+Tags with very few positive examples in the held-out split should be excluded from summary statistics or
+reported separately, since their ROC-AUC is dominated by label noise rather than model behavior.
+
+10.4 5-D Vector Stability
+
+A key qualitative requirement is that the 5-D bottleneck vector should evolve smoothly over time even when
+the input audio fluctuates. Three properties are expected:
+· Each of the five channels varies independently -- a healthy bottleneck does not collapse onto a single
+
+    dominant axis.
+· The values change on a slow timescale (over many seconds) rather than flickering between adjacent
+
+    frames, because the LSTM carries its hidden and cell states across calls.
+· During silence, the soft state-decay logic in live_mic_test.py causes the vector to drift gently toward the
+
+    origin instead of holding a stale value.
+Figure 10.2 illustrates these properties on five generic channels evolving over time. The actual channels at
+runtime can be captured by piping the output of check_brain_health.py to a CSV and plotted with the same
+five-line layout.
+
+                                     Figure -- 10.2 Illustration of the five aesthetic-vector channels over time.
+
+10.5 Memory and Storage Footprint
+
+The pipeline has a strongly asymmetric storage profile: training-time artefacts are very large, while runtime
+artefacts are small.
+Artifact                   Description                        Order of magnitude
+D:/MTG_Jamendo_Full/                                          Hundreds of gigabytes
+cached_dataset.pt          Raw dataset                        Hundreds of gigabytes
+music_emotion_weights.pth  Cached VGGish embeddings + labels  A few megabytes
+                           Trained checkpoint + Z-score
+AestheticBrain_256.onnx    statistics                         A few megabytes
+audioset-vggish-3.onnx     Exported bottleneck graph          A few hundred megabytes
+LSTM runtime memory        Pretrained VGGish ONNX             Negligible
+                           Hidden + cell + intermediates
+
+The runtime configuration only needs the two ONNX graphs and the auto-generated C++ header of
+normalization constants, which together fit well inside a few hundred megabytes -- small enough to ship
+with the engine package.
+11. Discussion and Conclusion
+
+11.1 What Went Well
+
+Several design decisions paid off clearly:
+
+· The bottleneck is the right shape. A 5-D bottleneck is small enough that engine-side mapping stays
+    interpretable but large enough to preserve qualitative variation across genres and moods.
+
+· VGGish was the right encoder. Its training distribution (AudioSet) is a vastly better match for our use
+    case than HuBERT's speech bias. The latency saving is a free bonus.
+
+· Stateful inference works. Carrying h, c across calls produces a temporally coherent control signal
+    without stitching audio into long synchronous batches.
+
+· Auto-generated normalization constants. Baking  and  into a C++ header eliminated an entire class of
+    silent inference-distribution-shift bugs.
+
+11.2 Limitations
+
+· Tag granularity. The 195-tag vocabulary lumps together fine-grained moods. A larger, multi-source
+    vocabulary might improve mood resolution but would also increase tail sparsity.
+
+· Single-layer LSTM. Empirically, a single-layer 256-dim LSTM was sufficient. A two-layer LSTM was tested
+    but did not improve loss meaningfully and roughly doubled inference latency.
+
+· Weak frame-level supervision. Every frame in a track is supervised with the same multi-hot vector. A
+    frame-level annotated dataset would likely improve per-segment fidelity, at the cost of dataset
+    acquisition.
+
+· No explicit beat tracker. The Rhythm channel is learned implicitly. A future version could fuse a
+    dedicated beat tracker (e.g. madmom) into the engine-side pipeline for stronger rhythmic locking.
+
+11.3 Future Work
+
+16. Cross-modal supervision. Joint training on (audio, lighting cue) pairs harvested from concert recordings
+    could replace the proxy supervision of multi-label tags with direct lighting supervision.
+
+17. User personalization. A small adapter network trained on per-user feedback ("this should feel warmer")
+    would allow the aesthetic vector to be re-projected into the user's preferred lighting taste.
+
+18. Distillation. The bottleneck network is already tiny; a smaller VGGish-mobile front-end would push the
+    whole pipeline below 5 ms per frame on integrated GPUs.
+
+11.4 Conclusion
+
+The backend documented in this report transforms raw audio into a continuous, low-dimensional,
+temporally smooth control signal that drives an Unreal Engine-based affective light-automation system. The
+pipeline is built from carefully selected, well-understood components -- a pretrained VGGish encoder, a
+custom stateful LSTM with a deliberate 5-D bottleneck, focal loss, Z-score normalization, and an ONNX-based
+engine-side runtime -- and the resulting system is designed to meet the three engineering goals stated in
+the introduction: perceptual fidelity, temporal coherence and a latency budget that fits comfortably inside
+the inference cadence.
+The ML backend is one half of the project; the engine-side rendering and lighting system is the other.
+Together they form a complete capstone deliverable: a real-time, deterministic, ML-driven affective
+renderer in which sound and light remain mathematically locked, rather than merely correlated.
+Appendix A -- End-to-End Sequence Diagram
+
+                                        Figure -- A.1 End-to-end sequence from microphone to stage lights.
+Appendix B -- Hyperparameter Cheat Sheet
+
+Constant        Description                    Value
+
+TARGET_SR       Audio sample rate              16 000 Hz
+MEL_BANDS       Number of mel bins             64
+MEL_FRAMES      Frames per VGGish chunk        96
+EMBEDDING_DIM   VGGish output                  128
+HIDDEN_DIM      LSTM hidden                    256
+BOTTLENECK_DIM  Aesthetic vector size          5
+NUM_TAGS        Tag vocabulary                 195
+BATCH_SIZE      Training batch                 32
+TOTAL_EPOCHS    Training schedule length       100
+FOCAL_GAMMA     Focal loss focusing parameter  2.0
+GRAD_CLIP       Max gradient norm              1.0
+LR_PHASE_1      Adam LR                        1e-4
+LR_PHASE_2      SGD LR                         1e-3
+LR_PHASE_3      SGD decay                      1e-4
+MOMENTUM        SGD momentum                   0.9
+WEIGHT_DECAY    SGD weight decay               1e-4
+DROPOUT         Intermediate stack             0.2
+SILENCE_GATE    Live volume threshold          0.005
+STATE_DECAY     h, c decay during silence      × 0.95
+UE_RC_HOST      Unreal RC base URL             http://localhost:30010
+Appendix C -- Glossary  The 5-D bottleneck output that drives engine-side
+                        lighting.
+Aesthetic Vector
+Affective               Pertaining to mood, emotion or feeling, as opposed
+Bottleneck              to content.
+Focal Loss
+MCP                     A deliberately small intermediate layer that forces
+NNE                     compressed representation.
+ONNX
+Stateful LSTM           A modification of cross-entropy that down-weights
+VGGish                  well-classified examples.
+Z-Score
+                        Model Context Protocol, a tool-exposing protocol
+                        for LLMs.
+
+                        Neural Network Engine, Unreal's neural runtime
+                        module.
+
+                        Open Neural Network Exchange, a portable graph
+                        format.
+
+                        An LSTM whose hidden/cell states persist across
+                        calls.
+
+                        A VGG-style audio embedding network trained on
+                        AudioSet.
+
+                        Normalization to zero mean and unit variance per
+                        feature channel.
+Bibliography
+
+[1] T.-Y. Lin, P. Goyal, R. Girshick, K. He, P. Dollár. Focal Loss for Dense Object Detection. ICCV 2017.
+[2] M. Won, S. Chun, O. Nieto, X. Serra. Data-Driven Harmonic Filters for Audio Representation Learning.
+ICASSP 2020.
+[3] S. Hershey et al. CNN Architectures for Large-Scale Audio Classification. ICASSP 2017.
+[4] J. Gemmeke et al. Audio Set: An Ontology and Human-Labeled Dataset for Audio Events. ICASSP 2017.
+[5] D. Bogdanov et al. The MTG-Jamendo Dataset for Automatic Music Tagging. ICML Workshop 2019.
+[6] A. Paszke et al. PyTorch: An Imperative Style, High-Performance Deep Learning Library. NeurIPS 2019.
+[7] ONNX Working Group. Open Neural Network Exchange Specification. 2017­present.
+[8] J. A. Russell. A Circumplex Model of Affect. Journal of Personality and Social Psychology 1980.
+[9] Epic Games. Unreal Engine 5.7 Documentation: Neural Network Engine and Remote Control API. 2026.
+

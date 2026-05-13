@@ -16,7 +16,11 @@ public class MusicAI_Visualizer : ModuleRules
             "Niagara",
             "AudioCapture",
             "AudioMixer",
-            "SignalProcessing"
+            "SignalProcessing",
+            "Json",
+            "JsonUtilities",
+            "Networking",
+            "Sockets"
         });
     }
 }

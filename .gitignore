@@ -22,3 +22,14 @@ ai_backend/temp_extract/
 # --- System ---
 .DS_Store
 Thumbs.db
+
+# --- Large AI model assets (exceed GitHub's 100 MB limit) ---
+# VGGish ONNX model wrapped as a UE5 .uasset, 275 MB. Download separately and place at
+# MusicAI_Visualizer/Content/audioset-vggish-3.uasset before opening the project.
+MusicAI_Visualizer/Content/audioset-vggish-3.uasset
+MusicAI_Visualizer/Content/audioset-vggish-3.uasset.meta
+
+# --- Per-user / IDE settings ---
+.claude/settings.local.json
+.vscode/
+*.code-workspace

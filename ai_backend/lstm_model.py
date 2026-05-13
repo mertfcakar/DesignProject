@@ -40,3 +40,14 @@ class InferenceWrapper(nn.Module):
     def forward(self, x, h, c):
         logits, aesthetic_vector, hn, cn = self.model(x, h, c)
         return aesthetic_vector[:, -1, :], hn, cn
+
+class InferenceWrapperV2(nn.Module):
+    """Returns sigmoid tag probabilities AND the bottleneck. Used for the ONNX
+    that exposes the 195-tag classifier to UE5."""
+    def __init__(self, model):
+        super().__init__()
+        self.model = model
+    def forward(self, x, h, c):
+        logits, aesthetic_vector, hn, cn = self.model(x, h, c)
+        tag_probs = torch.sigmoid(logits[:, -1, :])
+        return tag_probs, aesthetic_vector[:, -1, :], hn, cn

@@ -1593,7 +1593,7 @@ void AConcertStageDirector::BuildStage()
     //   - Vocalist FRONT CENTER, mic in front of vocalist
     AddInstrument(FVector(-StageWidth * 0.28f, StageDepth * DrumDepthFraction, StageDeckZ),      FRotator(0.f, DrumYawDeg,     0.f), DrumMesh,     nullptr,      1100.f, FVector(0, 0, 150), DrumScale);
     AddInstrument(FVector(0.f, -StageDepth * MicDepthFraction, StageDeckZ),                     FRotator(0.f, MicYawDeg,      0.f), MicMesh,      nullptr,       700.f, FVector(0, 0, 150), MicScale);
-    AddInstrument(FVector(0.f, StageDepth * 0.30f, StageDeckZ),                                 FRotator(0.f, PianoYawDeg,    0.f), PianoMesh,    nullptr,       950.f, FVector(0, 0, 100), PianoScale);
+    AddInstrument(FVector(StageWidth * PianoXFraction, StageDepth * PianoDepthFraction, StageDeckZ), FRotator(0.f, PianoYawDeg,    0.f), PianoMesh,    nullptr,       950.f, FVector(0, 0, 100), PianoScale);
     AddInstrument(FVector( StageWidth * 0.28f,  StageDepth * 0.05f, StageDeckZ),                FRotator(0.f, GuitarYawDeg,   0.f), RoryMesh,     nullptr,       950.f, FVector(0, 0, 150), GuitarScale);
     AddInstrument(FVector(0.f, -StageDepth * VocalistDepthFraction, StageDeckZ),                FRotator(0.f, VocalistYawDeg, 0.f), nullptr,      VocalistMesh,  850.f, FVector(0, 0, 180), VocalistScale);
     // Index 5: violin / strings — sits on stage right of vocalist

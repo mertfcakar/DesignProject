@@ -365,7 +365,18 @@ public:
     // +0.5=back of stage). Lowered from 0.45 -> 0.15 so the drum kit doesn't clip into
     // the back wall when scaled up. Tune in editor if you want it further forward / back.
     UPROPERTY(EditAnywhere, Category = "Stage|Instruments")
-    float DrumDepthFraction = -0.05f;   // Slightly FORWARD of stage center — was 0.15 (clipping back wall)
+    float DrumDepthFraction = 0.18f;    // Pushed BACK of stage so it doesn't collide with piano up front
+
+    // Piano position fractions. Negative X = stage left, positive = stage right.
+    // Negative Depth = closer to audience, positive = back of stage.
+    UPROPERTY(EditAnywhere, Category = "Stage|Instruments")
+    float PianoXFraction = -0.32f;       // Pushed FURTHER LEFT (drums at -0.28 reaches into -0.20 range)
+
+    // Piano sits at the FRONT LEFT corner of the stage, well clear of drums which now sit
+    // at the BACK LEFT. Separation: ~17m diagonally in 3D space — no overlap even with
+    // the large mesh scales.
+    UPROPERTY(EditAnywhere, Category = "Stage|Instruments")
+    float PianoDepthFraction = -0.32f;
 
     // Per-instrument Yaw rotation (degrees) on top of the mesh's natural orientation.
     // Imported scanned meshes have inconsistent default-forward axes — these let you

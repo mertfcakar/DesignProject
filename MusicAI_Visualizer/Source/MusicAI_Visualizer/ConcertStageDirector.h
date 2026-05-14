@@ -24,7 +24,9 @@ enum class ELightingScene : uint8
     // Classical / ambient / jazz never enter these because they'd feel obnoxious there.
     HeartBeat,   // All wash + beam lights snap fully ON on each kick drum hit, blackout between
     Cascade,     // Rapid one-light-at-a-time sweep across the truss (faster than Chase)
-    Sparkle      // Random per-light flashes — like camera flashes scattered through the rig
+    Sparkle,     // Random per-light flashes — like camera flashes scattered through the rig
+    RainbowWave, // Pop-flavored: hue marches across the truss in a smooth gradient
+    BeamStab     // Rock-flavored: all beams pitch straight down on every kick (rain of light)
 };
 
 UENUM()
@@ -53,13 +55,264 @@ public:
     // Place the AConcertStageDirector actor near the BACK wall (e.g. world Y = +5500) so the stage
     // sits at the back and audience extends forward in -Y.
     UPROPERTY(EditAnywhere, Category = "Stage|Geometry")
-    float StageWidth = 3000.f;   // 30 m wide stage truss
+    float StageWidth = 8000.f;   // 80 m stadium-scale stage
 
     UPROPERTY(EditAnywhere, Category = "Stage|Geometry")
-    float StageDepth = 1500.f;   // 15 m deep stage zone
+    float StageDepth = 3500.f;   // 35 m deep stage zone
 
     UPROPERTY(EditAnywhere, Category = "Stage|Geometry")
-    float TrussHeight = 1500.f;  // 15 m truss in an 18 m room (3 m clearance)
+    float TrussHeight = 3500.f;  // 35 m truss (much higher, with visible light fixtures hanging)
+
+    // ----- Light fixture counts (tunable for the "more lights" festival look) -----
+    UPROPERTY(EditAnywhere, Category = "Stage|Geometry", meta = (ClampMin = "2", ClampMax = "32"))
+    int32 NumWashLights = 12;          // front-row wash lights along truss
+
+    UPROPERTY(EditAnywhere, Category = "Stage|Geometry", meta = (ClampMin = "0", ClampMax = "32"))
+    int32 NumBackWashLights = 8;       // back-row wash lights (back-lighting the band)
+
+    UPROPERTY(EditAnywhere, Category = "Stage|Geometry", meta = (ClampMin = "2", ClampMax = "32"))
+    int32 NumBeamLights = 10;          // moving beam lights (tight beams)
+
+    UPROPERTY(EditAnywhere, Category = "Stage|Geometry", meta = (ClampMin = "0", ClampMax = "16"))
+    int32 NumStrobeLights = 8;         // LED strobe bars on back wall
+
+    UPROPERTY(EditAnywhere, Category = "Stage|Geometry", meta = (ClampMin = "0", ClampMax = "10"))
+    int32 NumSideLightsPerSide = 3;    // side-tower lights, per side (so 3 = 6 total)
+
+    UPROPERTY(EditAnywhere, Category = "Stage|Geometry", meta = (ClampMin = "0", ClampMax = "16"))
+    int32 NumFloorLights = 8;          // stage-floor uplights
+
+    UPROPERTY(EditAnywhere, Category = "Stage|Geometry", meta = (ClampMin = "0", ClampMax = "32"))
+    int32 NumLaserLights = 10;         // ultra-tight beam lights (0.5 deg cone) — laser-show feel
+
+    // When true, lasers form X / cross patterns during Burst scenes.
+    // Left-side lasers aim right, right-side aim left, meeting in the center mid-air.
+    UPROPERTY(EditAnywhere, Category = "Stage|Geometry")
+    bool bLaserCrossPattern = true;
+
+    UPROPERTY(EditAnywhere, Category = "Stage|Geometry", meta = (ClampMin = "0", ClampMax = "32"))
+    int32 NumAudienceCeilingLights = 16;  // overhead lights above the audience (off most of the time)
+
+    // ----- Visible light fixtures (cube/cylinder meshes at each light position) -----
+    // Spawns small emissive mesh "PAR cans" at each light source so the user can SEE where
+    // every spotlight beam originates from instead of beams appearing magically in midair.
+    UPROPERTY(EditAnywhere, Category = "Stage|Fixtures")
+    bool bSpawnLightFixtures = true;
+
+    // Size (cm) of each fixture box. Real PAR cans are ~25 cm diameter — at 35 they're
+    // visible from far away but not chunky-looking close up.
+    UPROPERTY(EditAnywhere, Category = "Stage|Fixtures", meta = (ClampMin = "10", ClampMax = "150"))
+    float FixtureSize = 35.f;
+
+    // Emissive boost: multiplied onto each fixture's emissive color so the housing actually
+    // glows. 5-15 = subtle, 20-40 = punchy "the fixture is ON".
+    UPROPERTY(EditAnywhere, Category = "Stage|Fixtures", meta = (ClampMin = "0.0", ClampMax = "100.0"))
+    float FixtureEmissiveStrength = 15.f;
+
+    // ----- Physical stage geometry (truss towers, PA stacks, backdrop, monitors) -----
+    // When true, BuildStageStructure() spawns the visible concert-stage skeleton: 4 truss
+    // towers at the corners, horizontal roof beams, speaker stacks, stage monitors, backdrop.
+    // Makes the lights look like they're MOUNTED on something instead of floating in midair.
+    UPROPERTY(EditAnywhere, Category = "Stage|Structure")
+    bool bSpawnStageStructure = true;
+
+    // Raised stage platform (low slab the band stands on, like a real festival stage).
+    UPROPERTY(EditAnywhere, Category = "Stage|Structure")
+    bool bSpawnStagePlatform = true;
+
+    // Raised stage height (how high the band stands above the room floor).
+    // 60 = club/lounge; 150-200 = real concert; 250+ = arena/festival.
+    UPROPERTY(EditAnywhere, Category = "Stage|Structure", meta = (ClampMin = "10", ClampMax = "500"))
+    float StagePlatformHeight = 200.f;    // 2 m raised platform — real concert height
+
+    // Truss thickness (cross-section of the metal beams).
+    UPROPERTY(EditAnywhere, Category = "Stage|Structure", meta = (ClampMin = "10", ClampMax = "100"))
+    float TrussThickness = 35.f;
+
+    // Number of horizontal truss cross-beams visible across the top.
+    UPROPERTY(EditAnywhere, Category = "Stage|Structure", meta = (ClampMin = "1", ClampMax = "8"))
+    int32 NumTrussCrossBeams = 3;
+
+    // PA speaker stacks per side (1 = single tower, 2 = double-wide).
+    UPROPERTY(EditAnywhere, Category = "Stage|Structure", meta = (ClampMin = "0", ClampMax = "4"))
+    int32 NumSpeakerStacksPerSide = 1;
+
+    // Stage monitors at front edge of platform.
+    UPROPERTY(EditAnywhere, Category = "Stage|Structure", meta = (ClampMin = "0", ClampMax = "12"))
+    int32 NumStageMonitors = 5;
+
+    // Tint colors so the user can quickly recolor the structure in editor.
+    UPROPERTY(EditAnywhere, Category = "Stage|Structure")
+    FLinearColor TrussTint    = FLinearColor(0.55f, 0.55f, 0.60f, 1.f);   // silver metallic
+
+    UPROPERTY(EditAnywhere, Category = "Stage|Structure")
+    FLinearColor SpeakerTint  = FLinearColor(0.05f, 0.05f, 0.05f, 1.f);   // matte black
+
+    UPROPERTY(EditAnywhere, Category = "Stage|Structure")
+    FLinearColor BackdropTint = FLinearColor(0.05f, 0.10f, 0.30f, 1.f);   // dark concert blue
+
+    UPROPERTY(EditAnywhere, Category = "Stage|Structure")
+    FLinearColor PlatformTint = FLinearColor(0.08f, 0.08f, 0.08f, 1.f);   // dark gray
+
+    // Make the stage platform glossy/reflective. Visible only with Lumen GI or screen-space
+    // reflections enabled in the project's renderer settings.
+    UPROPERTY(EditAnywhere, Category = "Stage|Structure")
+    bool bReflectiveStageFloor = true;
+
+    UPROPERTY(EditAnywhere, Category = "Stage|Structure", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+    float StageFloorRoughness = 0.15f;     // 0 = mirror, 1 = matte
+
+    UPROPERTY(EditAnywhere, Category = "Stage|Structure", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+    float StageFloorMetallic = 0.8f;       // 1 = full metal, 0 = dielectric
+
+    // ----- LED VIDEO PANEL BACKDROP -----
+    // Big emissive panels behind the band that pulse with music + scene color. This is the
+    // single biggest visual upgrade — they dominate any screenshot you take. Real concerts
+    // ALWAYS have these; without them the back of your stage looks empty.
+    UPROPERTY(EditAnywhere, Category = "Stage|LED")
+    bool bSpawnLedPanels = true;
+
+    // Number of side-by-side panels behind the band. 1 = single huge panel, 3 = like
+    // a real festival "left-center-right" triptych, 5+ = video wall.
+    UPROPERTY(EditAnywhere, Category = "Stage|LED", meta = (ClampMin = "1", ClampMax = "9"))
+    int32 NumLedPanels = 3;
+
+    UPROPERTY(EditAnywhere, Category = "Stage|LED", meta = (ClampMin = "200", ClampMax = "3000"))
+    float LedPanelWidth = 1500.f;     // 15 m per panel
+
+    UPROPERTY(EditAnywhere, Category = "Stage|LED", meta = (ClampMin = "200", ClampMax = "3000"))
+    float LedPanelHeight = 1000.f;    // 10 m tall
+
+    UPROPERTY(EditAnywhere, Category = "Stage|LED", meta = (ClampMin = "0", ClampMax = "2000"))
+    float LedPanelGap = 80.f;         // horizontal gap between panels
+
+    UPROPERTY(EditAnywhere, Category = "Stage|LED", meta = (ClampMin = "0", ClampMax = "2000"))
+    float LedPanelHeightFromFloor = 400.f;   // bottom edge height above stage deck
+
+    // Emissive multiplier — higher = panel glows much brighter than the lights around it
+    UPROPERTY(EditAnywhere, Category = "Stage|LED", meta = (ClampMin = "0.1", ClampMax = "200.0"))
+    float LedPanelEmissiveStrength = 30.f;
+
+    // Per-panel hue offset (degrees) so each panel can be a different color in real time
+    UPROPERTY(EditAnywhere, Category = "Stage|LED", meta = (ClampMin = "0", ClampMax = "180"))
+    float LedPanelHueSpread = 30.f;
+
+    // Floating 3D text in front of the center LED panel showing the detected genre name
+    // (e.g. "ROCK", "ELECTRONIC", "CLASSICAL"). Updates in real time.
+    UPROPERTY(EditAnywhere, Category = "Stage|LED")
+    bool bShowGenreText = true;
+
+    UPROPERTY(EditAnywhere, Category = "Stage|LED", meta = (ClampMin = "50", ClampMax = "1000"))
+    float GenreTextSize = 180.f;
+
+    // ----- 3D SPECTRUM ANALYZER -----
+    // A row of vertical bars below the LED panels that "dance" with the audio. Bars on the
+    // LEFT are bass, MIDDLE are mids, RIGHT are treble. Each bar grows/shrinks with its
+    // band's amplitude + per-bar randomization. Looks technical AND beautiful, perfect for
+    // a capstone showing real-time audio reactivity.
+    UPROPERTY(EditAnywhere, Category = "Stage|Spectrum")
+    bool bSpawnSpectrumAnalyzer = true;
+
+    UPROPERTY(EditAnywhere, Category = "Stage|Spectrum", meta = (ClampMin = "8", ClampMax = "128"))
+    int32 NumSpectrumBars = 48;
+
+    UPROPERTY(EditAnywhere, Category = "Stage|Spectrum", meta = (ClampMin = "100", ClampMax = "2000"))
+    float SpectrumBarMaxHeight = 800.f;     // tallest a bar can grow (cm)
+
+    UPROPERTY(EditAnywhere, Category = "Stage|Spectrum", meta = (ClampMin = "10", ClampMax = "200"))
+    float SpectrumBarWidth = 30.f;
+
+    UPROPERTY(EditAnywhere, Category = "Stage|Spectrum", meta = (ClampMin = "0", ClampMax = "100"))
+    float SpectrumBarGap = 8.f;
+
+    // Smoothing factor — 0=instant, 1=never moves. 0.15 = snappy but not jittery.
+    UPROPERTY(EditAnywhere, Category = "Stage|Spectrum", meta = (ClampMin = "0", ClampMax = "0.95"))
+    float SpectrumBarSmoothing = 0.18f;
+
+    UPROPERTY(EditAnywhere, Category = "Stage|Spectrum", meta = (ClampMin = "0.1", ClampMax = "100.0"))
+    float SpectrumBarEmissiveStrength = 12.f;
+
+    // ----- STAGE HAZE (volumetric drifting puffs) -----
+    // Scattered point lights with very high volumetric scattering and tiny intensity.
+    // In the volumetric fog they show up as soft glowing blobs that drift slowly —
+    // looks like smoke / haze pockets catching the stage lights.
+    UPROPERTY(EditAnywhere, Category = "Stage|Haze")
+    bool bSpawnHaze = true;
+
+    UPROPERTY(EditAnywhere, Category = "Stage|Haze", meta = (ClampMin = "0", ClampMax = "128"))
+    int32 NumHazePuffs = 24;
+
+    UPROPERTY(EditAnywhere, Category = "Stage|Haze", meta = (ClampMin = "1.0", ClampMax = "1000.0"))
+    float HazePuffIntensity = 80.f;
+
+    UPROPERTY(EditAnywhere, Category = "Stage|Haze", meta = (ClampMin = "200.0", ClampMax = "5000.0"))
+    float HazePuffRadius = 1200.f;
+
+    UPROPERTY(EditAnywhere, Category = "Stage|Haze", meta = (ClampMin = "0.5", ClampMax = "20.0"))
+    float HazeVolumetricScattering = 12.f;
+
+    UPROPERTY(EditAnywhere, Category = "Stage|Haze", meta = (ClampMin = "0.0", ClampMax = "1000.0"))
+    float HazeDriftAmplitude = 300.f;
+
+    UPROPERTY(EditAnywhere, Category = "Stage|Haze", meta = (ClampMin = "0.01", ClampMax = "5.0"))
+    float HazeDriftSpeed = 0.25f;
+
+    // ----- CAMERA SHAKE -----
+    // Adds a procedural camera shake to the player camera that's driven by bass energy
+    // and big drum onsets. Subtle on quiet sections, visceral during chorus/drops.
+    UPROPERTY(EditAnywhere, Category = "Stage|CameraShake")
+    bool bEnableCameraShake = true;
+
+    UPROPERTY(EditAnywhere, Category = "Stage|CameraShake", meta = (ClampMin = "0.0", ClampMax = "5.0"))
+    float CameraShakeBassStrength = 1.2f;   // multiplier on bass-driven continuous shake
+
+    UPROPERTY(EditAnywhere, Category = "Stage|CameraShake", meta = (ClampMin = "0.0", ClampMax = "5.0"))
+    float CameraShakeKickStrength = 2.5f;   // multiplier on kick-driven impact shake
+
+    UPROPERTY(EditAnywhere, Category = "Stage|CameraShake", meta = (ClampMin = "0.0", ClampMax = "20.0"))
+    float CameraShakeMaxOffset = 6.0f;      // max camera offset in cm (don't go crazy or it nauseates)
+
+    // ----- Procedural Venue (room) ------
+    // Builds the floor, 4 walls, and ceiling programmatically so you don't have to scale up
+    // the manually-placed cubes in the level. DELETE your existing wall/floor/ceiling actors
+    // before enabling this — otherwise you'll have two sets of walls overlapping.
+    UPROPERTY(EditAnywhere, Category = "Stage|Venue")
+    bool bSpawnVenue = false;
+
+    UPROPERTY(EditAnywhere, Category = "Stage|Venue", meta = (ClampMin = "5000", ClampMax = "60000"))
+    float VenueWidth  = 20000.f;   // 200 m wide (arena scale)
+
+    UPROPERTY(EditAnywhere, Category = "Stage|Venue", meta = (ClampMin = "5000", ClampMax = "60000"))
+    float VenueDepth  = 30000.f;   // 300 m deep
+
+    UPROPERTY(EditAnywhere, Category = "Stage|Venue", meta = (ClampMin = "1000", ClampMax = "15000"))
+    float VenueHeight = 5500.f;    // 55 m tall ceiling (real arenas: 30-60 m)
+
+    // How far behind the actor's local origin the back wall sits.
+    // Larger = more empty space between stage and back wall.
+    UPROPERTY(EditAnywhere, Category = "Stage|Venue", meta = (ClampMin = "0", ClampMax = "5000"))
+    float VenueBackOffset = 500.f;
+
+    // Tints applied to default material if no override is assigned.
+    UPROPERTY(EditAnywhere, Category = "Stage|Venue")
+    FLinearColor VenueFloorTint   = FLinearColor(0.10f, 0.10f, 0.12f, 1.f);   // very dark gray
+
+    UPROPERTY(EditAnywhere, Category = "Stage|Venue")
+    FLinearColor VenueWallTint    = FLinearColor(0.30f, 0.15f, 0.10f, 1.f);   // brick-red tint
+
+    UPROPERTY(EditAnywhere, Category = "Stage|Venue")
+    FLinearColor VenueCeilingTint = FLinearColor(0.06f, 0.06f, 0.06f, 1.f);   // near-black
+
+    // Optional material overrides. If assigned in editor, takes priority over the tint.
+    // Use this to apply your existing brick material at the new venue scale.
+    UPROPERTY(EditAnywhere, Category = "Stage|Venue")
+    TObjectPtr<UMaterialInterface> VenueFloorMaterialOverride;
+
+    UPROPERTY(EditAnywhere, Category = "Stage|Venue")
+    TObjectPtr<UMaterialInterface> VenueWallMaterialOverride;
+
+    UPROPERTY(EditAnywhere, Category = "Stage|Venue")
+    TObjectPtr<UMaterialInterface> VenueCeilingMaterialOverride;
 
     UPROPERTY(EditAnywhere, Category = "Stage|Power")
     float WashIntensityMax = 8000.f;
@@ -83,25 +336,36 @@ public:
     // scanned meshes — piano was already correct at 2.5x, but the mic stand mesh has a
     // huge natural size and the guitarist mesh has a tiny one. Tune in editor if needed.
     UPROPERTY(EditAnywhere, Category = "Stage|Instruments")
-    float DrumScale     = 4.0f;    // drum_kit comes in tiny — 2.5 * 4.0 = 10x final scale
+    float DrumScale     = 2.5f;    // 2.5 * 2.5 = ~6x final — drum kit fits on the platform now
 
     UPROPERTY(EditAnywhere, Category = "Stage|Instruments")
-    float MicScale      = 0.04f;   // mic stand was reported ~30x too big at 2.5 -> 0.04 brings it back
+    float MicScale      = 0.04f;   // mic stand has huge natural size, tiny scale brings it back
 
     UPROPERTY(EditAnywhere, Category = "Stage|Instruments")
-    float PianoScale    = 1.0f;    // piano displays correctly at the global 2.5x
+    float PianoScale    = 1.0f;
 
     UPROPERTY(EditAnywhere, Category = "Stage|Instruments")
-    float GuitarScale   = 3.0f;    // gitarist1 mesh is small by default, 2.5 * 3.0 = 7.5x
+    float GuitarScale   = 1.5f;    // gitarist1 mesh — 2.5 * 1.5 = ~4x — keeps him visible without dwarfing the stage
 
     UPROPERTY(EditAnywhere, Category = "Stage|Instruments")
-    float VocalistScale = 1.5f;
+    float VocalistScale = 1.0f;
+
+    // Violin / strings — index 5. Triggered by violin / viola / cello / strings tags.
+    // Default 8.0 = combined 20× — visible from audience distance on the 80m wide stage.
+    UPROPERTY(EditAnywhere, Category = "Stage|Instruments")
+    float ViolinScale = 8.0f;
+
+    UPROPERTY(EditAnywhere, Category = "Stage|Instruments")
+    float ViolinYawDeg = 0.f;
+
+    UPROPERTY(EditAnywhere, Category = "Stage|Instruments")
+    TObjectPtr<UStaticMesh> ViolinMeshOverride;
 
     // Drum kit depth as a fraction of StageDepth from the actor origin (0=stage center,
     // +0.5=back of stage). Lowered from 0.45 -> 0.15 so the drum kit doesn't clip into
     // the back wall when scaled up. Tune in editor if you want it further forward / back.
     UPROPERTY(EditAnywhere, Category = "Stage|Instruments")
-    float DrumDepthFraction = 0.15f;
+    float DrumDepthFraction = -0.05f;   // Slightly FORWARD of stage center — was 0.15 (clipping back wall)
 
     // Per-instrument Yaw rotation (degrees) on top of the mesh's natural orientation.
     // Imported scanned meshes have inconsistent default-forward axes — these let you
@@ -109,7 +373,7 @@ public:
     // below were chosen by flipping each wrong-facing mesh 180 degrees from its previous
     // hardcoded rotation. If a mesh still faces the wrong way, just bump its Yaw +/-90.
     UPROPERTY(EditAnywhere, Category = "Stage|Instruments")
-    float DrumYawDeg     = 180.f;   // (was 180, drums looked correct)
+    float DrumYawDeg     = 0.f;     // Flipped 180 — drummer now faces the audience
 
     UPROPERTY(EditAnywhere, Category = "Stage|Instruments")
     float MicYawDeg      = 180.f;   // (was 0, flipped)
@@ -144,6 +408,57 @@ public:
     // heavy/instrumental tracks, so the mic would otherwise never appear.
     UPROPERTY(EditAnywhere, Category = "Stage|Instruments")
     bool bAlwaysShowMicStand = true;
+
+    // Break the vocalist's default T-pose by rotating his upper-arm bones downward,
+    // so it looks like he's holding the mic instead of standing arms-out.
+    UPROPERTY(EditAnywhere, Category = "Stage|Instruments")
+    bool bAdjustVocalistPose = true;
+
+    // Rotation applied to the vocalist's upper-arm bones in COMPONENT space.
+    // Both arms use the SAME rotation now (the right-arm-looks-correct case).
+    // The bone's local axes already mirror left/right in the rig, so giving them
+    // identical rotation produces a symmetric pose.
+    UPROPERTY(EditAnywhere, Category = "Stage|Instruments")
+    FRotator VocalistLeftArmRotation = FRotator(-60.f, -20.f, 0.f);
+
+    UPROPERTY(EditAnywhere, Category = "Stage|Instruments")
+    FRotator VocalistRightArmRotation = FRotator(-60.f, -20.f, 0.f);
+
+    // Optional: explicitly set the bone names if auto-detect doesn't find them.
+    // Leave at None to auto-detect (tries LeftArm / L_UpperArm / upperarm_l / etc).
+    UPROPERTY(EditAnywhere, Category = "Stage|Instruments")
+    FName VocalistLeftArmBoneOverride = NAME_None;
+
+    UPROPERTY(EditAnywhere, Category = "Stage|Instruments")
+    FName VocalistRightArmBoneOverride = NAME_None;
+
+    // FALLBACK: if rotating the arms can't produce a natural pose for this rig, just
+    // scale the upper-arm bones to zero so the arms disappear. The vocalist will appear
+    // as a torso + head + legs, which combined with the mic stand reads as "holding mic".
+    UPROPERTY(EditAnywhere, Category = "Stage|Instruments")
+    bool bHideVocalistArms = false;
+
+    // Subtle head bob — rotates the vocalist's head bone with bass so he doesn't look frozen.
+    UPROPERTY(EditAnywhere, Category = "Stage|Instruments")
+    bool bVocalistHeadBob = true;
+
+    // When true, instrument X-positions COMPRESS toward stage center when fewer instruments
+    // are visible (so 2-piece classical doesn't look lost on a 80m wide stage), and SPREAD
+    // out when more instruments appear.
+    UPROPERTY(EditAnywhere, Category = "Stage|Instruments")
+    bool bDynamicInstrumentPlacement = true;
+
+    // How fast positions lerp toward target (0=instant, 0.95=glacial). 0.12 = smooth ~1s transition.
+    UPROPERTY(EditAnywhere, Category = "Stage|Instruments", meta = (ClampMin = "0", ClampMax = "0.95"))
+    float InstrumentPlacementSmoothing = 0.12f;
+
+    // Override head bone name if auto-detect doesn't find it.
+    UPROPERTY(EditAnywhere, Category = "Stage|Instruments")
+    FName VocalistHeadBoneOverride = NAME_None;
+
+    // Max pitch (degrees) the head bobs down on each beat. 0 = none, 10-20 = subtle bob.
+    UPROPERTY(EditAnywhere, Category = "Stage|Instruments", meta = (ClampMin = "0", ClampMax = "45"))
+    float VocalistHeadBobAmount = 12.f;
 
     // When true, every Tick draws an on-screen debug line showing which instrument
     // meshes are currently visible + their detection confidence. Turn on while iterating
@@ -202,6 +517,100 @@ public:
     // fixtures aren't perfectly stable; tiny random wobble looks more organic.
     UPROPERTY(EditAnywhere, Category = "Stage|Quality", meta = (ClampMin = "0.0", ClampMax = "0.20"))
     float CinematicFlickerAmount = 0.04f;
+
+    // ============= PYRO BURSTS (firework-style stinger that shoots up from the stage floor) =============
+    // Triggered only at MUSICAL PEAKS (high arousal + high bass) AND only for energetic genres
+    // (rock/metal/electronic/hiphop). Hard cooldown so it fires AT MOST 1-2 times per song.
+
+    UPROPERTY(EditAnywhere, Category = "Stage|Pyro")
+    bool bEnablePyroBursts = true;
+
+    UPROPERTY(EditAnywhere, Category = "Stage|Pyro", meta = (ClampMin = "10.0", ClampMax = "300.0"))
+    float PyroCooldownSeconds = 60.f;        // minimum gap between pyros
+
+    UPROPERTY(EditAnywhere, Category = "Stage|Pyro", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+    float PyroIntensityThreshold = 0.75f;    // I must exceed this
+
+    UPROPERTY(EditAnywhere, Category = "Stage|Pyro", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+    float PyroBassThreshold = 0.55f;         // BassLvl must exceed this
+
+    UPROPERTY(EditAnywhere, Category = "Stage|Pyro", meta = (ClampMin = "0.5", ClampMax = "10.0"))
+    float PyroDurationSeconds = 2.0f;        // how long each burst lasts
+
+    UPROPERTY(EditAnywhere, Category = "Stage|Pyro", meta = (ClampMin = "1", ClampMax = "32"))
+    int32 NumPyroLights = 12;                // how many upward beams in each burst
+
+    UPROPERTY(EditAnywhere, Category = "Stage|Pyro", meta = (ClampMin = "5000.0", ClampMax = "500000.0"))
+    float PyroIntensityPeak = 150000.f;      // peak intensity per pyro light
+
+    // Optional: assign a Niagara System asset for actual particle effects. If null we fall
+    // back to procedural upward-pointing lights (still looks great).
+    UPROPERTY(EditAnywhere, Category = "Stage|Pyro")
+    TObjectPtr<class UNiagaraSystem> PyroNiagaraSystem;
+
+    // ============= CO2 JETS =============
+    // Tall white-light columns at the stage front that fire on SNARE hits during energetic
+    // scenes — separate from the rare pyro bursts. Like a DJ-style CO2 fog cannon.
+    UPROPERTY(EditAnywhere, Category = "Stage|CO2")
+    bool bEnableCO2Jets = true;
+
+    UPROPERTY(EditAnywhere, Category = "Stage|CO2", meta = (ClampMin = "1", ClampMax = "24"))
+    int32 NumCO2Jets = 8;
+
+    UPROPERTY(EditAnywhere, Category = "Stage|CO2", meta = (ClampMin = "5000.0", ClampMax = "300000.0"))
+    float CO2JetIntensityPeak = 60000.f;
+
+    UPROPERTY(EditAnywhere, Category = "Stage|CO2", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+    float CO2JetSnareThreshold = 0.5f;     // snare flash must exceed this to fire a jet
+
+    // ============= PHOTOGRAPHER FLASHES =============
+    // Random tiny white strobes scattered throughout the audience volume — like a
+    // bunch of fans taking phone pictures during a concert. Adds huge "real concert" feel.
+    UPROPERTY(EditAnywhere, Category = "Stage|CrowdFlash")
+    bool bEnableCrowdFlashes = true;
+
+    UPROPERTY(EditAnywhere, Category = "Stage|CrowdFlash", meta = (ClampMin = "0", ClampMax = "128"))
+    int32 NumCrowdFlashes = 36;
+
+    UPROPERTY(EditAnywhere, Category = "Stage|CrowdFlash", meta = (ClampMin = "1000.0", ClampMax = "200000.0"))
+    float CrowdFlashIntensity = 25000.f;
+
+    // Probability per frame that each flash bulb fires. Higher = more flashes per second.
+    // 0.002 ≈ each light fires once every ~8 seconds on average at 60fps.
+    UPROPERTY(EditAnywhere, Category = "Stage|CrowdFlash", meta = (ClampMin = "0.0", ClampMax = "0.5"))
+    float CrowdFlashRatePerFrame = 0.005f;
+
+    // Multiplier when in peak scenes (Burst/HeartBeat/Cascade/Sparkle).
+    UPROPERTY(EditAnywhere, Category = "Stage|CrowdFlash", meta = (ClampMin = "1.0", ClampMax = "20.0"))
+    float CrowdFlashPeakMultiplier = 6.0f;
+
+    // ============= DJ BOOTH (appears for Electronic genres) =============
+    // A booth at front-center of the stage that shows up ONLY when the detected
+    // genre family is Electronic. Has an emissive front face that pulses with the music.
+    UPROPERTY(EditAnywhere, Category = "Stage|DJBooth")
+    bool bSpawnDJBooth = true;
+
+    UPROPERTY(EditAnywhere, Category = "Stage|DJBooth")
+    float DJBoothWidth = 350.f;     // 3.5m wide
+
+    UPROPERTY(EditAnywhere, Category = "Stage|DJBooth")
+    float DJBoothDepth = 150.f;     // 1.5m deep
+
+    UPROPERTY(EditAnywhere, Category = "Stage|DJBooth")
+    float DJBoothHeight = 130.f;    // 1.3m tall (standing booth)
+
+    UPROPERTY(EditAnywhere, Category = "Stage|DJBooth", meta = (ClampMin = "0.1", ClampMax = "200.0"))
+    float DJBoothEmissiveStrength = 25.f;
+
+    // ============= SIDE LED BARS (vertical strips on the truss towers) =============
+    UPROPERTY(EditAnywhere, Category = "Stage|SideLED")
+    bool bSpawnSideLedBars = true;
+
+    UPROPERTY(EditAnywhere, Category = "Stage|SideLED", meta = (ClampMin = "1", ClampMax = "4"))
+    int32 NumSideLedBarsPerTower = 1;
+
+    UPROPERTY(EditAnywhere, Category = "Stage|SideLED", meta = (ClampMin = "0.1", ClampMax = "200.0"))
+    float SideLedEmissiveStrength = 20.f;
 
     // Source radius (cm) for spotlights — bigger source = softer beam falloff with
     // physically-correct edge blur. Default 15; cinematic feel = 30-50.
@@ -614,11 +1023,120 @@ private:
     UPROPERTY()
     TArray<TObjectPtr<UPointLightComponent>> FloorLights;
 
+    // Laser-thin beams (0.5 deg cone) — sweep fast on Cascade/Sparkle scenes only.
+    UPROPERTY()
+    TArray<TObjectPtr<USpotLightComponent>> LaserLights;
+
+    // LED video panels — emissive plane meshes behind the band. Their Dynamic Material
+    // Instances are updated each Tick to pulse + cycle color in sync with music.
+    UPROPERTY()
+    TArray<TObjectPtr<UStaticMeshComponent>> LedPanels;
+
+    // 3D spectrum analyzer — row of vertical bars whose height tracks audio amplitude.
+    UPROPERTY()
+    TArray<TObjectPtr<UStaticMeshComponent>> SpectrumBars;
+
+    // Per-bar current height (cm), used for smoothing.
+    TArray<float> SpectrumBarCurrentHeights;
+
+    // Stage haze — drifting volumetric puffs (each is a low-intensity high-scatter PointLight).
+    UPROPERTY()
+    TArray<TObjectPtr<UPointLightComponent>> HazePuffs;
+
+    // Base position around which each haze puff drifts (sin-wave offset in Tick).
+    TArray<FVector> HazePuffBasePositions;
+
+    // Speaker stack meshes — scale Y is animated by bass to make the cones visibly thump.
+    UPROPERTY()
+    TArray<TObjectPtr<UStaticMeshComponent>> SpeakerMeshes;
+
+    // Base scale for each speaker mesh (so we can pulse around the base).
+    TArray<FVector> SpeakerBaseScales;
+
+    // Ceiling lights above the AUDIENCE pointing down. Off by default; activate on
+    // Burst / Cascade / Sparkle scenes to light the crowd dramatically.
+    UPROPERTY()
+    TArray<TObjectPtr<USpotLightComponent>> AudienceCeilingLights;
+
+    // Pyro stinger lights — spawned at stage front edge, point straight up.
+    // Off by default; flash bright + fade out on rare musical peaks.
+    UPROPERTY()
+    TArray<TObjectPtr<USpotLightComponent>> PyroLights;
+
+    // Cylinder meshes co-located with each pyro light — emissive beam visual.
+    UPROPERTY()
+    TArray<TObjectPtr<UStaticMeshComponent>> PyroBeamMeshes;
+
+    double LastPyroTime    = -1000.0;  // wall time of last pyro
+    double PyroStartTime   = -1000.0;  // start of currently-active pyro (or far in past)
+
+    // CO2 jet lights — white columns at stage front, fire on snare hits.
+    UPROPERTY()
+    TArray<TObjectPtr<USpotLightComponent>> CO2JetLights;
+
+    UPROPERTY()
+    TArray<TObjectPtr<UStaticMeshComponent>> CO2JetMeshes;
+
+    // Per-jet timer (decreases each frame, fires set to 0.3s on snare hit)
+    TArray<float> CO2JetTimers;
+
+    // Photographer-flash audience strobes — tiny PointLights scattered in the crowd.
+    UPROPERTY()
+    TArray<TObjectPtr<UPointLightComponent>> CrowdFlashLights;
+
+    // Per-flash decay timer (1.0 when triggered, 0 when dark).
+    TArray<float> CrowdFlashTimers;
+
+    // DJ booth — body + emissive front panel. Visibility gated to Electronic family.
+    UPROPERTY()
+    TObjectPtr<UStaticMeshComponent> DJBoothBody;
+
+    UPROPERTY()
+    TObjectPtr<UStaticMeshComponent> DJBoothPanel;
+
+    // Side LED bars mounted on the truss towers
+    UPROPERTY()
+    TArray<TObjectPtr<UStaticMeshComponent>> SideLedBars;
+
+    // Floating "ROCK"/"ELECTRONIC" 3D text in front of the center LED panel
+    UPROPERTY()
+    TObjectPtr<class UTextRenderComponent> GenreTextRender;
+
+    // Parallel fixture-mesh arrays — one mesh per light, same index, so the mesh emissive
+    // color/intensity can be updated each frame to match its light. Each component has a
+    // Dynamic Material Instance so we can set "Color" + "Emissive" parameters at runtime.
+    UPROPERTY()
+    TArray<TObjectPtr<UStaticMeshComponent>> WashFixtures;
+
+    UPROPERTY()
+    TArray<TObjectPtr<UStaticMeshComponent>> BeamFixtures;
+
+    UPROPERTY()
+    TArray<TObjectPtr<UStaticMeshComponent>> StrobeFixtures;
+
+    UPROPERTY()
+    TArray<TObjectPtr<UStaticMeshComponent>> SideFixtures;
+
+    UPROPERTY()
+    TArray<TObjectPtr<UStaticMeshComponent>> FloorFixtures;
+
     UPROPERTY()
     TArray<TObjectPtr<USceneComponent>> InstrumentRoots;
 
+    // Tracked separately so we can adjust the vocalist's T-pose (rotate arm bones down).
+    // UPoseableMeshComponent (not USkeletalMeshComponent) is the right class for direct
+    // bone manipulation — it exposes SetBoneRotationByName at runtime without an AnimBP.
+    UPROPERTY()
+    TObjectPtr<class UPoseableMeshComponent> VocalistSkeletalMesh;
+
+    // Resolved head bone name (auto-detected at BuildStage) for the head bob animation.
+    FName VocalistHeadBoneResolved = NAME_None;
+
     UPROPERTY()
     TArray<TObjectPtr<UStaticMeshComponent>> InstrumentMeshes;
+
+    // Base position from BuildStage for each instrument (used for dynamic placement lerp).
+    TArray<FVector> InstrumentBasePositions;
 
     UPROPERTY()
     TArray<TObjectPtr<UPointLightComponent>> InstrumentLights;
@@ -690,6 +1208,11 @@ private:
     void BuildDiscoBall();
     void BuildDanceFloorLights();
     void BuildBar();
+    void BuildStageStructure();  // truss towers, PA stacks, backdrop, stage monitors, platform
+    void BuildVenue();           // floor, ceiling, 4 walls — procedural room
+    void BuildLedPanels();       // emissive video-panel-style backdrop behind the band
+    void BuildSpectrumAnalyzer();// vertical bars dancing with audio bands
+    void BuildHaze();            // scattered drifting volumetric puffs above the stage + audience
     static float Normalize(float Raw) { return (FMath::Tanh(Raw * 0.4f) + 1.0f) * 0.5f; }
 
     ELightingScene CurrentScene = ELightingScene::Warm;

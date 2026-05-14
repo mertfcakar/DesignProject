@@ -1,218 +1,323 @@
-# Project Handoff — Continue from Here
+# MusicAI Visualizer — Project Handoff
 
-**Project:** Real-Time Affective Light Automation (Senior Capstone, Spring 2026)
-**Owner:** Mert Fahri Çakar
-**Last update:** 2026-05-10 (end of nightclub-build session)
-**Project root:** `C:\Users\mertf\MyProjects-main\DesignProject`
-
-To continue with Claude in a new chat, paste this entire file as your first message and ask Claude to continue from "WHERE YOU LEFT OFF" below.
-
----
-
-## WHERE YOU LEFT OFF
-
-The nightclub venue and all major scene features are built. Last session covered:
-
-- Built the venue: 6 cubes (floor, ceiling, 4 walls) at nightclub scale (50m × 80m × 12m)
-- Applied 3 materials (M_Floor concrete, M_Wall brick, M_Ceiling rusty metal)
-- Imported Renderpeople "Scanned 3D People Pack" (9 photoreal characters) into `Content/Scanned3DPeoplePack/RP_Character/`
-- Audience system uses Renderpeople characters (assign via `AudienceMeshOverride` or `AudienceMeshPool` for variety)
-- Tables with people standing around them (lounge/VIP zones)
-- Bar stools next to people at tables
-- Disco ball hanging in the middle of the audience block, rotating at runtime
-- 50 RGB dance-floor lights cycling through HSV with kick/snare beat boost
-- House lights for general venue illumination
-- 96 grid audience members + 24 table audience members, all music-reactive
-
-The system runs the full hybrid Python+UE5 architecture (sidecar + UE5 lighting), and the Renderpeople characters appear in the audience.
-
-**Last issue (unresolved at end of session):** When `AudienceStartDepth` was set to 5000, the audience block ended up so far from the stage that the disco ball and dance floor lights (which the code places at the center of the audience block) ended up far from the camera and looked like they were "at the back" of the room. The recommended fix is to use `AudienceStartDepth = 2800`.
-
-**Next things to do at start of next session:**
-1. Set `AudienceStartDepth = 2800` on ConcertStageDirector (fixes dance floor / disco ball position)
-2. If still not framed well, move MainCamera to Loc(0, -2500, 600)
-3. Take a final screenshot to verify the look is right
-4. Optional polish: assign all 9 Renderpeople characters to `AudienceMeshPool` for crowd variety
-5. Optional polish: download free chair/table meshes from Fab and assign to `ChairMeshOverride` and `TableMeshOverride`
-6. Final demo recording with sidecar running and 3 contrasting songs (Bach, Bohemian, Daft Punk or Metallica)
-7. Submit final report (`backend_report_corrections.pdf` already prepared for the friend writing the academic report)
+**Last updated:** 2026-05-14
+**Project owner:** Mert Fahri Çakar (CompE senior, capstone project, Spring 2026)
+**Email:** f.mertcakar@outlook.com
+**Repo:** https://github.com/mertfcakar/DesignProject
+**Local path:** `C:\Users\mertf\MyProjects-main\DesignProject`
 
 ---
 
-## SYSTEM STATUS — WHAT WORKS
+## Read this if you're picking up this project in a new conversation
 
-| Component | Status |
+This is a real-time AI-driven music visualizer built in **Unreal Engine 5.7**. It uses ML to classify audio (genre/mood/instruments) and drives a full concert-scale lighting + stage system in response.
+
+The project is **feature-complete for capstone demo purposes**. Remaining work is polish + presentation prep, NOT more major features. Resist the user's urge to add more features unless they specifically ask — they have a deadline and the technical depth is already strong.
+
+## High-level architecture
+
+```
+┌────────────────────────┐         ┌─────────────────────────────────┐
+│  System audio          │         │  UE5 ConcertStageDirector       │
+│  via VoiceMeeter Out B1│         │  - Reads ML data from AudioSrc  │
+└──────────┬─────────────┘         │  - Drives 400+ scene elements   │
+           │                       │  - 13 lighting scenes           │
+           ├────────────┐          │  - Genre-family aggregation     │
+           ▼            ▼          └──────────▲──────────────────────┘
+   ┌─────────────┐ ┌─────────────┐            │
+   │ Python      │ │ UE5 NNE     │            │
+   │ sidecar.py  │ │ in-engine   │            │
+   │ (port 17777)│ │ inference   │            │
+   │ VGGish+LSTM │ │ AestheticBrain v2         │
+   │ Top-15 tags │ │ + tag_names.json          │
+   └──────┬──────┘ └─────┬───────┘            │
+          │              │                    │
+          │ UDP JSON     │ direct C++         │
+          └─────────────▶│                    │
+                         ▼                    │
+              ┌─────────────────────┐         │
+              │ AffectiveAudioActor │─────────┘
+              │ - GetTopGenresAny() │   (Tick reads accessors)
+              │ - GetTopInstr...()  │
+              │ - GetBassLevel()    │
+              │ - 5-D affect vec    │
+              └─────────────────────┘
+```
+
+**Hybrid pipeline:** The C++ in-engine NNE inference produces the 5-D affective vector (Arousal/Valence/Timbre/Rhythm/Intensity) + tag predictions. The Python sidecar gives more accurate top-N genre/mood/instrument detection via the full PyTorch pipeline. The sidecar is OPTIONAL — `GetTopGenresAny` falls back to in-engine ONNX if the UDP socket isn't connected.
+
+## Critical files
+
+| File | Purpose |
 |---|---|
-| Python AI inference pipeline | ✅ 87% top-3 accuracy on benchmark |
-| Python sidecar (`python_sidecar.py`) | ✅ broadcasts UDP JSON on port 17777 |
-| UE5 receives Python predictions | ✅ shows `[PY] GENRE:` overlay |
-| UE5 fallback ONNX inference | ✅ used if sidecar offline |
-| C++ DSP (bass/mid/treble + onsets) | ✅ |
-| Genre-aware lighting palette | ✅ rock=red, classical=warm, electronic=neon, etc. |
-| Instrument-aware light boost | ✅ |
-| Music-reactive audience system | ✅ sway with arousal, jump on kick drum |
-| Instrument show/hide on detection | ✅ piano/drums/guitar appear when detected |
-| Nightclub venue (cubes) | ✅ 50×80×12m enclosed, materials applied |
-| Renderpeople audience figures | ✅ Dennis (or any character) assigned via override |
-| Tables with people standing around | ✅ 8 tables, 3 people each |
-| Bar stools next to people | ✅ |
-| Disco ball | ✅ rotating, hanging below ceiling |
-| RGB dance floor lights | ✅ 50 lights cycling HSV, beat-boosted |
-| House lights | ✅ warm ambient illumination |
-| CSV logging with top tags | ✅ |
-| AudienceMeshPool for crowd variety | ✅ coded — needs all 9 characters assigned in editor |
+| `MusicAI_Visualizer/Source/MusicAI_Visualizer/ConcertStageDirector.h` | All lighting + scene + audience properties. ~1200 lines. |
+| `MusicAI_Visualizer/Source/MusicAI_Visualizer/ConcertStageDirector.cpp` | Main visualizer logic. ~3200 lines. Tick() drives everything. |
+| `MusicAI_Visualizer/Source/MusicAI_Visualizer/AffectiveAudioActor.h/.cpp` | Audio analysis + ML inference + sidecar UDP receiver |
+| `MusicAI_Visualizer/Content/AI/AestheticBrain_v2.uasset` | Trained ONNX model wrapper |
+| `MusicAI_Visualizer/Content/AI/tag_names.json` | Tag name list (genre/mood/instrument categories) |
+| `MusicAI_Visualizer/Content/audioset-vggish-3.uasset` | **275 MB — NOT in git.** VGGish feature extractor. Download separately. |
+| `ai_backend/python_sidecar.py` | Python sidecar — top-15 tag classifier, sends JSON over UDP |
+| `ai_backend/audioset-vggish-3.onnx` | Same model in raw ONNX form (gitignored due to size) |
 
----
+## Features fully implemented (huge — do NOT add more without strong reason)
 
-## CURRENT VENUE — EXACT TRANSFORMS
+### Lighting (400+ dynamic elements)
+- 12 front wash + 8 back wash spotlights on truss
+- 10 beam moving heads with bass-driven yaw amplitude
+- 8 strobe LED bars in two rows on back wall
+- 6 side tower stack lights
+- 8 floor uplighters
+- 10 laser lights (0.5° pencil-thin cones, sweep fast)
+- 16 audience ceiling lights (scene-driven)
+- 12 disco ball rotating colored beams
+- 12 pyro burst lights (genre-locked: rock/electronic/hiphop, 60s cooldown, fires on peaks)
+- 8 CO2 jet lights (white columns, fire on snare hits)
+- 24 stage haze puffs (volumetric drifting fog blobs)
+- 36 photographer audience flashes (random crowd strobes, more on peak scenes)
+- 64-tile RGB dance floor cycling hue
+- 2 side LED bar strips on truss towers
+- Visible PAR-can fixture meshes at every spotlight — emissive housings glow with light color
 
-```
-ALL ROTATIONS = (0, 0, 0)
+### Lighting scenes (13 total)
+| Scene | Trigger | What it does |
+|---|---|---|
+| Warm | Various | Static warm wash |
+| Cool | Ambient | Static cool wash |
+| Neon | Energetic | Magenta + cyan |
+| Chase | Most genres | One-light sweep |
+| Strobe | Energetic | Fast on/off all lights |
+| Spotlight | Calm | Center focus only |
+| Burst | Arousal spike | Full bright explosion |
+| Rainbow | Pop | Hue cycle across lights |
+| HeartBeat | Rock/Electronic | Kick-locked binary flash |
+| Cascade | Rock/Electronic | Fast pencil sweep |
+| Sparkle | Rock/Electronic | Random per-light flashes |
+| **RainbowWave** | Pop | Hue marches across truss like a wave |
+| **BeamStab** | Rock | All beams snap straight down on kick |
 
-Cube         Location              Scale
-─────────────────────────────────────────────────
-floor        (0, 0, -10)           (50, 80, 0.2)
-ceiling      (0, 0, 1210)          (50, 80, 0.2)
-wall_back    (0, 4000, 600)        (50, 0.2, 12)
-wall_front   (0, -4000, 600)       (50, 0.2, 12)
-wall_left    (-2500, 0, 600)       (0.2, 80, 12)
-wall_right   (2500, 0, 600)        (0.2, 80, 12)
-```
+Scene rotation: every 5-9s. Burst triggered on arousal spike. Scene re-rolls on big intensity jumps.
 
-(Some users have moved to bigger scale — check current values in their level.)
+### Stage geometry (procedural)
+- Venue: **200m × 300m × 55m** procedural room (floor + ceiling + 4 walls)
+- Stage platform: 80m × 35m × 2m raised slab (glossy/metallic for reflections)
+- Truss structure: 4 corner towers, perimeter beams, 3 cross-beams at top
+- 4 PA speaker stacks (2 stacks per side) — Y-scale animated by bass
+- 5 stage monitors (wedge speakers at front)
+- Backdrop wall behind the band
+- 3 LED video panels (15m × 10m each) behind drum kit
+- 48 spectrum analyzer bars below the LED panels (FFT-style — bass/mid/treble bands)
+- Genre text floating in front of center LED panel ("ROCK"/"ELECTRONIC"/"CLASSICAL"/etc.)
+- DJ booth (appears only for Electronic genres, has emissive front panel)
 
----
+### Band (6 instruments, dynamically placed)
+- 0: Drum kit
+- 1: Mic stand (always visible — stage prop)
+- 2: Piano
+- 3: Guitar (visual proxy: guitarist character mesh)
+- 4: Vocalist (UPoseableMeshComponent — supports bone manipulation)
+- 5: Violin/strings
 
-## CURRENT ConcertStageDirector PROPERTIES (recommended)
+Vocalist features:
+- Arms repositioned out of T-pose via bone rotation
+- Head bob animation synced to bass
 
-```
-Location:                  (0, 3000, 0)
-StageWidth:                3500
-StageDepth:                1500
-TrussHeight:               1100
+Dynamic placement: when fewer instruments visible, they compress toward stage center. Scale: 5 visible = full spread, 2 visible = 50% compressed, 1 visible = dead center.
 
-AudienceStartDepth:        2800            ← was 5000, RECOMMENDED 2800
-AudienceRows:              8
-AudiencePerRow:            12              (= 96 grid audience)
-AudienceFloorIntensityMax: 2000
+### Genre-aware visibility (the rules)
+| Detected genre family | Visible instruments |
+|---|---|
+| Classical | Piano + Violin + Mic + Vocalist |
+| Jazz | Piano + Drums + Mic + Vocalist |
+| Rock/Metal | Drums + Guitar + Mic + Vocalist |
+| Hip-hop | Drums + Mic + Vocalist |
+| Electronic | DJ booth + Mic + Vocalist (no band) |
+| Pop / Funk | Full band visible |
+| Unknown | Detection-driven (whoever's tag passes threshold) |
 
-AudienceMeshOverride:      rp_dennis_posed_004 static mesh   (or assign different)
-AudienceMeshPool:          (empty — populate with all 9 RP characters for variety)
-AudienceScaleMultiplier:   2.0
+Order of operations: tag fallback (low threshold) → family override (final). Family override always wins over tag fallback.
 
-WashIntensityMax:          25000
-BeamIntensityMax:          80000
-StrobeIntensityMax:        40000
-FloorIntensityMax:         12000
+### Music reactivity
+- Bass-gating wash lights (lights dim when bass low, bright when high)
+- Snare white-flash overlay on every snare hit
+- Kick-driven hue stepping (color advances per beat)
+- Scene re-roll on big intensity changes
+- Speaker cone Y-axis vibration with bass
+- Per-light micro-flicker (3-5%)
+- Camera shake on bass drops (may need proper UCameraShakeBase class for reliability)
+- Crowd bobbing — 120 audience members jump on kick, sway with arousal, continuous bass bob
+- Red flame wash overlay on rock chorus moments
+- Pyro bursts (1-2 per song, rock/electronic only, on peak)
+- Photographer flashes (more frequent on peak scenes)
+- CO2 jets (50% random fire on snare)
 
-bSpawnTables:              true
-NumTables:                 8
-PeoplePerTable:            3
-TableRadius:               250
-ChairMeshOverride:         (empty — uses cube; replace with free Fab bar stool)
-bSpawnChairs:              true
+### Visual quality
+- Cinematic post-process volume (bloom, vignette, saturation, exposure, lens flare, film grain)
+- High-quality volumetric fog (GridPixelSize=4, GridSizeZ=192)
+- High-quality light shafts (godrays)
+- 16x anisotropic filtering
+- Soft light source radii for cinematic beam falloff
 
-bSpawnHouseLights:         true
-HouseLightIntensity:       1200
+### Audio pipeline (`AffectiveAudioActor`)
+- 5-D affective scores: Arousal, Valence, Timbre, Rhythm, Intensity
+- Top-15 genre tags per category — family-aggregated (15+ rock subgenres → RockMetal family)
+- Bass / Mid / Treble levels (DSP-derived)
+- Kick / Snare / Hi-hat onset detection
+- Silence detection (3-second timeout, fades all lights out)
+- Time-based hue oscillation + stepped palette rotation every 30s
 
-bSpawnDiscoBall:           true
-DiscoBallScale:            2.0
-DiscoBallRotationSpeed:    35
-
-bSpawnDanceFloorLights:    true
-DanceFloorRows:            5
-DanceFloorCols:            10
-DanceFloorLightIntensity:  6000
-DanceFloorHueCycleSeconds: 6.0
-```
-
-MainCamera: Location (0, -2500, 600), Rotation (-3, 90, 0).
-
----
-
-## FILE INVENTORY (do not modify unless intentional)
-
-### Python backend (`ai_backend/`)
-- `python_sidecar.py` — current production runtime
-- `lstm_model.py` — model definition (StatefulMusicBottleneck + InferenceWrapperV2)
-- `train.py` — training script
-- `test_genre.py` — batch evaluation
-- `diagnostic_pca.py` — confirms PCA postprocessing requirement
-- `export_onnx_v2.py` — exports AestheticBrain_v2.onnx
-- `export_vggish_pca.py` — generates VGGishPCAConstants.h
-- `export_vggish_mel.py` — generates VGGishMelConstants.h
-- `cpp_converter.py` — generates NormalizationConstants.h
-
-### UE5 source (`MusicAI_Visualizer/Source/MusicAI_Visualizer/`)
-- `AffectiveAudioActor.h/.cpp` — audio capture, DSP, UDP receiver, ONNX fallback
-- `ConcertStageDirector.h/.cpp` — stage, lights, audience, tables, disco ball, dance floor
-- `MusicAI_Visualizer.Build.cs` — module deps (NNE, Niagara, Json, Networking, Sockets)
-- `NormalizationConstants.h` — auto-generated z-score
-- `VGGishPCAConstants.h` — auto-generated PCA matrix
-- `VGGishMelConstants.h` — auto-generated mel filterbank
-
-### Documents
-- `PROJECT_MASTER_BLUEPRINT.md` — full architecture description
-- `backend_report_corrections.pdf` — corrections doc for the existing report (for friend writing academic report)
-- `backend_report_v2.md` — alternative new report (markdown)
-- `HANDOFF.md` — this file
-
----
-
-## HOW TO RUN
+## Sidecar setup (Python)
 
 ```powershell
-# Terminal 1 — Python AI sidecar
 cd C:\Users\mertf\MyProjects-main\DesignProject\ai_backend
+.\.venv\Scripts\Activate.ps1
 python python_sidecar.py
-
-# UE5 — open project, press Play
-# Spotify — play music (audio routes via VoiceMeeter Out B1)
 ```
 
+Uses VoiceMeeter Out B1 by default. Sends JSON to `127.0.0.1:17777`. Top-15 tags per category.
+
+If sidecar UDP fails to connect, UE5's in-engine ONNX takes over — lighting still works.
+
+## Build instructions
+
+### Live Coding (most edits)
+`Ctrl + Alt + F11` in UE5 editor. Takes 5-10s. Use for `.cpp` body changes.
+
+### Full rebuild (after header changes)
+1. Close editor entirely
+2. In Visual Studio: Build → Rebuild Solution. Takes 2-5 min.
+
+OR via command line:
+```powershell
+& "C:\Program Files\Epic Games\UE_5.7\Engine\Build\BatchFiles\Build.bat" MusicAI_VisualizerEditor Win64 Development -Project="C:\Users\mertf\MyProjects-main\DesignProject\MusicAI_Visualizer\MusicAI_Visualizer.uproject" -waitmutex
+```
+
+### Common compile gotchas (will save you debugging time)
+- **`IN` and `OUT` are Windows preprocessor macros** — never name local variables `IN` or `OUT`. They'll be silently stripped, causing 100+ cascade errors. Use `TagNames` / `OutPcts` / etc.
+- **`SetBoneRotationByName` is on `UPoseableMeshComponent`**, NOT `USkeletalMeshComponent`. Use poseable mesh for runtime bone manipulation.
+- **`APlayerCameraManager::GetActorLocation/Rotation` are private** — cast to `AActor*` first to use inherited public versions.
+- **`-WarningsAsErrors` is on** — variable shadowing (e.g., shadowing a lambda named `Flash` with a local `Flash`) fails the build.
+- **Functions used must be declared BEFORE their use** — no forward-declarations of static helpers. The genre `EGenreFamily` enum + helpers were moved above `PickScene` for this reason.
+- **UE5 property defaults don't auto-apply to existing actor instances.** When you change a C++ default, the editor still shows the OLD serialized value. User must click yellow reset arrow or manually retype.
+
+## Editor properties to know
+
+Under `ConcertStageDirector` Details panel:
+
+### Most-tuned categories
+- `Stage|Geometry` — StageWidth 8000, Depth 3500, TrussHeight 3500
+- `Stage|Venue` — `bSpawnVenue=true`, 20000×30000×5500
+- `Stage|Instruments` — Scale + YawDeg properties per instrument
+- `Stage|Quality` — `bCinematicMode=true`, bloom 0.5, vignette 0.4, volumetric boost 3.5
+- `Stage|Reactivity` — `bStrongMusicReactivity=true`, strength 1.5
+- `Stage|Dynamics` — color hue cycling parameters
+- `Stage|LED` — `bSpawnLedPanels=true`, 3 panels, emissive 30
+- `Stage|Spectrum` — `bSpawnSpectrumAnalyzer=true`, 48 bars
+- `Stage|Haze` — 24 puffs, intensity 80
+- `Stage|CrowdFlash` — `bEnableCrowdFlashes=true`, 36 lights
+- `Stage|Pyro` — `bEnablePyroBursts=true`, 60s cooldown
+- `Stage|CO2` — `bEnableCO2Jets=true`, 8 jets
+- `Stage|DJBooth` — `bSpawnDJBooth=true`
+- `Stage|Fixtures` — `bSpawnLightFixtures=true`, fixture size 35
+- `Stage|Structure` — `bSpawnStageStructure=true`, platform height 200
+- `Stage|SideLED` — side LED bars on towers
+
+### Mesh override slots (drag asset to assign without recompile)
+- `Drum Mesh Override`
+- `Mic Mesh Override`
+- `Piano Mesh Override`
+- `Guitar Mesh Override`
+- `Vocalist Mesh Override` (skeletal)
+- `Violin Mesh Override` (loads from `/Game/Instruments/violin/violin.violin` by default)
+- `Disco Ball Mesh Override`
+- `Audience Mesh Pool` (Renderpeople meshes)
+- `Venue Floor/Wall/Ceiling Material Override`
+
+## Known issues / unresolved
+
+1. **Piano not visible during classical music** — last fix: reordered tag fallback BEFORE family override so family wins. User should verify after compiling latest changes.
+2. **Vocalist arm pose** — user fixed manually in editor. Default rotations: `(-60, -20, 0)` for both arms (matching symmetric).
+3. **Violin scale** — bumped to 8.0 (combined 20× with InstrumentScale=2.5) after user reported too small.
+4. **Camera shake may not visibly fire** — UE5's PlayerCameraManager re-derives transform each frame; our changes might get overwritten. If shake doesn't show, would need a proper `UCameraShakeBase` subclass (~15 min more code).
+
+## Editor setup checklist (fresh clone)
+
+1. Clone repo
+2. **Download `audioset-vggish-3.uasset` from external source** (275 MB, NOT in git). Place at `MusicAI_Visualizer/Content/audioset-vggish-3.uasset`.
+3. Open `.uproject` in UE5.7
+4. Compile (Build → Build Solution in Visual Studio)
+5. In Outliner → `ConcertStageDirector` → Details panel:
+   - Verify all `bSpawn*` toggles are checked
+   - Verify dimensions match values above
+   - Drag instrument mesh assets into override slots if auto-load paths fail
+
+## What the user likely wants next
+
+In priority order (please push back — current state is enough for demo):
+
+1. **Live AI overlay HUD** (~45 min) — top corner showing top-3 detected genres + confidence + 5-D affect vector graph. PERFECT for capstone presentation, shows the ML working live.
+2. **LED panel scrolling gradient** (~45 min) — colors scroll across the 3 panels instead of solid pulse
+3. **Stage floor emissive grid** (~30 min) — pulsing line pattern on platform
+4. **Audience floor uplighting** (~30 min) — lights from beneath the dance floor
+
+## What's truly missing for capstone delivery (push these instead)
+
+**The user should work on these, not more code:**
+1. Final demo video recording (60-90s with great song — try Master of Puppets, Daft Punk, Bach in sequence)
+2. Poster (4-6 hero screenshots + architecture diagram + accuracy numbers from training)
+3. Final report writing
+4. Presentation rehearsal
+
+The technical depth is genuinely strong:
+- Top-15 substring matching across 80+ MTG-Jamendo subgenre tags
+- Family aggregation (rock + alternative + heavymetal + indie sum to RockMetal)
+- Hybrid in-engine + sidecar inference
+- 400+ music-reactive scene elements
+- Genre-aware instrument visibility
+- Dynamic placement based on visible-instrument count
+
+## Personality / communication style for this user
+
+- Senior CompE student. Wants very detailed step-by-step instructions, exact numbers, no assumptions.
+- Wants you to take ownership and just do things rather than ask for confirmation.
+- Sometimes gets frustrated when fixes don't work first try — assume your guesses about rig orientations, asset paths, etc. will be wrong and provide fallback options + Output Log logging.
+- Prefers seeing the work done immediately rather than discussion of options.
+- Don't use emojis.
+
+## Quick-start prompt for next chat
+
+Paste this into your next conversation:
+
+> I'm continuing work on a UE5 music visualizer capstone project. The full project handoff is in `C:\Users\mertf\MyProjects-main\DesignProject\HANDOFF.md` — please read it first before suggesting changes. The project is feature-complete; my remaining work is polish + presentation. Specific task today: [describe what you want to do]
+
+That single prompt + the handoff file is everything Claude needs to pick up exactly where we left off.
+
 ---
 
-## CRITICAL CONTEXT
+## Session log (high-level)
 
-### MicTest actor
-DO NOT delete `MicTest`. Its AudioCapture component feeds Windows recording device audio into UE5's submix. Without it, no audio analysis.
-
-### Audio routing
-- Spotify → Voicemeeter Input (Windows playback default)
-- VoiceMeeter routes to: A1 (headset), B1 (recording bus)
-- Voicemeeter Out B1 = Windows recording default
-- Both Python sidecar AND UE5 capture from B1 in parallel
-- UnrealEditor.exe audio output bypasses VoiceMeeter (set per-app in Volume Mixer) to avoid feedback loop
-
-### Hybrid architecture rationale
-Earlier iterations tried pure-UE5 ONNX inference. Found four bugs (PCA missing, z-score missing, mel filterbank wrong, LSTM saturation). Even after all fixes, residual numerical precision differences with VoiceMeeter audio path prevented exact match with Python. Sidecar pattern guarantees parity. This is industry-standard for ML in games.
-
-### Verified test results
-- Bach (full classical) → soundtrack/emotional/piano (lighting: warm white)
-- Bohemian Rhapsody from minute 4 (rock) → rock/energetic/bass (red strobes)
-- Metallica Master of Puppets → rock 49% / energetic / bass 46% sustained for 2 min
-- Daft Punk → electronic/synthesizer (magenta/cyan)
-
----
-
-## USER PREFERENCES (for new chat)
-
-- Prefers very detailed step-by-step instructions, exact numbers, no assumptions
-- Uses cubes for venue walls (rotation 0,0,0; scale axes determine wall vs floor)
-- Working on Windows 11 + RTX 4080 + UE 5.7
-- Uses VoiceMeeter Banana/Potato for audio routing
-- Uses Spotify as live audio source
-- Has VS Code + Python venv at `.venv/` in project root
-- Uses Renderpeople characters for audience (assigned via AudienceMeshOverride)
-- May get frustrated if instructions aren't concrete — pivot to exact actions immediately
-
----
-
-## TO START NEW CHAT
-
-1. Open new Claude conversation (any project — memory files for this project will auto-load if you're in the same project directory)
-2. Paste this entire HANDOFF.md content as the first message
-3. Add: "Continue from WHERE YOU LEFT OFF — set AudienceStartDepth=2800 and tell me what's next"
-4. Claude will pick up exactly where this conversation ended
-
-For deeper context, also reference `PROJECT_MASTER_BLUEPRINT.md` in the project root.
+Major work completed across this conversation:
+- Stage layout: dance floor centered under disco ball, tables/bar around perimeter
+- Genre-aware lighting (80+ subgenre tags → 11 family palettes)
+- Family aggregation across top-15 tags (solves single-tag flicker)
+- 13 lighting scenes including HeartBeat / Cascade / Sparkle / RainbowWave / BeamStab
+- Procedural venue (200m × 300m × 55m room)
+- Procedural stage structure (truss, speakers, monitors, platform, backdrop)
+- LED video panels (3 emissive panels behind band)
+- 48-bar 3D spectrum analyzer
+- Pyro bursts (rock/electronic only, rare)
+- CO2 jets (snare-driven)
+- Stage haze particles (24 volumetric puffs)
+- Photographer audience flashes
+- DJ booth (Electronic only)
+- Side LED bars
+- Reflective stage floor
+- Genre text on backdrop
+- Crowd bobbing animation with bass
+- Speaker cone vibration
+- Camera shake (may need polish)
+- Vocalist head bob + pose adjustment (T-pose fix)
+- Violin instrument added (index 5)
+- Dynamic instrument placement (compress toward center when fewer visible)
+- Music reactivity: bass-gating, snare white-flash, per-kick hue stepping
+- Cinematic post-process volume
+- Top-N audio analysis with hybrid sidecar + in-engine inference

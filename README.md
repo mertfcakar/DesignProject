@@ -2,6 +2,11 @@
 **Project:** AI-Powered Real-Time Music Visualization (Capstone)
 **Architecture Status:** V2 (Production / Latency-Optimized)
 
+## 👥 Team Members
+* **Tunahan Özcan**
+* **Mert Fahri Çakar**
+* **Nuri Çağrı Köroğlu**
+
 ## 🏗️ The Tech Stack (V2 Upgrades)
 * **Feature Extractor:** Google's `VGGish` (CNN-based, log-mel spectrograms for ultra-low latency). *(Upgraded from HuBERT)*.
 * **Classifier:** Custom Stateful 2-Layer LSTM with Latent Space Compression.
